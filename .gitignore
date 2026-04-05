@@ -32,6 +32,10 @@ env/
 ENV/
 .python-version
 
+# Cache de pytest y Python
+.pytest_cache/
+__pycache__/
+
 # ── Terraform ───────────────────────────────────────────────────────────────────
 # State local puede contener ARNs, IDs de recursos y otros datos sensibles
 terraform/.terraform/
