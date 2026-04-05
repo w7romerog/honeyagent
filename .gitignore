@@ -1,0 +1,62 @@
+# ── Secretos y configuración local ─────────────────────────────────────────────
+# NUNCA commitear estos archivos: contienen credenciales reales
+.env
+.env.local
+.env.production
+.env.staging
+# .env.example SÍ se versiona (es el template sin valores reales)
+
+# Secretos de AWS
+*.pem
+*.key
+credentials
+aws_credentials
+
+# ── Python ──────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+pip-log.txt
+
+# Entornos virtuales
+.venv/
+venv/
+env/
+ENV/
+.python-version
+
+# ── Terraform ───────────────────────────────────────────────────────────────────
+# State local puede contener ARNs, IDs de recursos y otros datos sensibles
+terraform/.terraform/
+terraform/terraform.tfstate
+terraform/terraform.tfstate.backup
+terraform/.terraform.lock.hcl
+terraform/tfplan
+*.tfvars          # pueden contener valores reales; usar variables de entorno
+!*.tfvars.example # solo templates
+
+# ── Reportes generados ──────────────────────────────────────────────────────────
+# Los reportes pueden contener IPs, usuarios y datos del incidente
+reports/
+*.pdf
+*.json
+!tests/mock_events/*.json   # los eventos de test sí se versionan
+
+# ── IDEs y sistema operativo ────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ── Logs ────────────────────────────────────────────────────────────────────────
+*.log
+logs/

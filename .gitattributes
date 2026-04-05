@@ -1,0 +1,8 @@
+# Normalizar saltos de línea: LF en el repo, conversión automática en Windows
+* text=auto eol=lf
+*.py text eol=lf
+*.yaml text eol=lf
+*.tf text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+*.txt text eol=lf
