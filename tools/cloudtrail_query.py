@@ -72,11 +72,11 @@ class CloudTrailQueryTool(HoneyTool):
         Returns:
             Dict con 'events', 'total_found', 'query_params', 'error'.
         """
-        if os.getenv("HONEYAGENT_MOCK", "false").lower() == "true":
-            return self._mock_response(source_ip, username)
-
         if not source_ip and not username:
             return {"events": [], "total_found": 0, "query_params": {}, "error": "Se requiere source_ip o username"}
+
+        if os.getenv("HONEYAGENT_MOCK", "false").lower() == "true":
+            return self._mock_response(source_ip, username)
 
         region = os.getenv("AWS_REGION", "us-east-1")
         client = boto3.client("cloudtrail", region_name=region)
