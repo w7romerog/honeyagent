@@ -25,10 +25,16 @@ data "archive_file" "lambda_zip" {
     ".env.example",
     "__pycache__",
     "*.pyc",
+    ".venv",          # entorno virtual local — las deps van en un Lambda Layer
     "terraform",
     "reports",
     "tests",
     "lambda_package.zip",
+    ".pytest_cache",
+    "pytest.ini",
+    "README.md",
+    "LICENSE",
+    ".github",
   ]
 }
 
@@ -134,6 +140,7 @@ resource "aws_lambda_function" "honeyagent" {
       AGENT_MODEL              = "claude-sonnet-4-6"
       HONEYAGENT_MOCK          = "false"
       LOG_LEVEL                = "INFO"
+      REPORT_BUCKET            = aws_s3_bucket.cloudtrail_logs.bucket
     }
   }
 

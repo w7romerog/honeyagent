@@ -43,6 +43,7 @@ terraform/terraform.tfstate
 terraform/terraform.tfstate.backup
 terraform/.terraform.lock.hcl
 terraform/tfplan
+terraform/lambda_package.zip   # generado por archive_file en terraform apply
 *.tfvars          # pueden contener valores reales; usar variables de entorno
 !*.tfvars.example # solo templates
 

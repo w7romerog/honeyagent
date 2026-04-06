@@ -10,11 +10,8 @@ el análisis con las otras herramientas.
 import json
 import logging
 import os
-import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from slack_notifier import send_slack_alert
-
 from tools.base import HoneyTool
 
 logger = logging.getLogger(__name__)
