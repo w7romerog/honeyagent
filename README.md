@@ -53,7 +53,7 @@ Atacante usa credenciales del honeypot de identidad
                           │
                           ▼
               Reporte .md + .json en S3
-        (reports/iam_identity/{yyyy}/{mm}/{dd}/{ts}_{identity}.*)
+        (reports/iam_identity/{yyyy}/{mm}/{dd}/{ts}_{identity}_{event_id}.*)
 ```
 
 ## Stack tecnológico

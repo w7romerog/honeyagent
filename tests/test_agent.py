@@ -343,14 +343,42 @@ class TestReportGenerator:
             assert "billing-readonly" in report["agent_report"]["final_analysis"]
 
     @pytest.mark.unit
-    def test_convencion_de_nombre_incluye_timestamp_e_identidad(self, iam_identity_event, sample_agent_result):
+    def test_convencion_de_nombre_incluye_timestamp_identidad_y_event_id(self, iam_identity_event, sample_agent_result):
         from agent.report_generator import generate_report
         with tempfile.TemporaryDirectory() as tmpdir:
-            paths = generate_report(iam_identity_event, sample_agent_result, output_dir=tmpdir)
+            paths = generate_report(
+                iam_identity_event, sample_agent_result,
+                raw_event={"eventID": "abcd1234-5678-90ab-cdef-1234567890ab"},
+                output_dir=tmpdir,
+            )
 
-            assert paths["key_prefix"] == "reports/iam_identity/2024/01/15/20240115T032211Z_billing-readonly"
-            assert Path(paths["markdown"]).name == "20240115T032211Z_billing-readonly.md"
-            assert Path(paths["json"]).name == "20240115T032211Z_billing-readonly.json"
+            assert paths["key_prefix"] == "reports/iam_identity/2024/01/15/20240115T032211Z_billing-readonly_abcd1234"
+            assert Path(paths["markdown"]).name == "20240115T032211Z_billing-readonly_abcd1234.md"
+            assert Path(paths["json"]).name == "20240115T032211Z_billing-readonly_abcd1234.json"
+
+    @pytest.mark.unit
+    def test_eventos_simultaneos_no_pisan_el_mismo_archivo(self, iam_identity_event, sample_agent_result):
+        """
+        Dos ataques con la misma identidad señuelo en el mismo segundo (mismo
+        event_time) deben producir nombres de archivo distintos, gracias al
+        sufijo del eventID de CloudTrail.
+        """
+        from agent.report_generator import generate_report
+        with tempfile.TemporaryDirectory() as tmpdir:
+            paths_1 = generate_report(
+                iam_identity_event, sample_agent_result,
+                raw_event={"eventID": "11111111-aaaa-bbbb-cccc-111111111111"},
+                output_dir=tmpdir,
+            )
+            paths_2 = generate_report(
+                iam_identity_event, sample_agent_result,
+                raw_event={"eventID": "22222222-dddd-eeee-ffff-222222222222"},
+                output_dir=tmpdir,
+            )
+
+            assert paths_1["key_prefix"] != paths_2["key_prefix"]
+            assert os.path.exists(paths_1["markdown"])
+            assert os.path.exists(paths_2["markdown"])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

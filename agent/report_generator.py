@@ -12,8 +12,13 @@ Produce dos formatos (alcance del Cap. 4 — sin PDF, sin dashboard):
      no depende de la retención de CloudTrail.
 
 Convención de nombre de archivo (usada también para la key de S3):
-    reports/iam_identity/{yyyy}/{mm}/{dd}/{timestamp}_{identity}.md
-    reports/iam_identity/{yyyy}/{mm}/{dd}/{timestamp}_{identity}.json
+    reports/iam_identity/{yyyy}/{mm}/{dd}/{timestamp}_{identity}_{event_id}.md
+    reports/iam_identity/{yyyy}/{mm}/{dd}/{timestamp}_{identity}_{event_id}.json
+
+El sufijo {event_id} (primeros 8 caracteres del eventID de CloudTrail, único
+por evento) evita colisiones cuando dos ataques con la misma identidad señuelo
+caen en el mismo segundo (ej. ataques simultáneos): sin ese sufijo, el segundo
+reporte pisaría al primero en S3.
 """
 
 import json
@@ -25,19 +30,25 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
-def report_key_prefix(event: dict) -> str:
+def report_key_prefix(event: dict, raw_event: dict | None = None) -> str:
     """
     Construye el prefijo de la convención de nombres a partir del timestamp
-    del evento y la identidad involucrada (no la hora de generación del reporte,
-    para poder correlacionar el reporte con el evento original).
+    del evento, la identidad involucrada, y el eventID de CloudTrail (no la
+    hora de generación del reporte, para poder correlacionar el reporte con
+    el evento original).
+
+    El eventID es el desempatador ante ataques simultáneos: dos eventos de la
+    misma identidad señuelo pueden caer en el mismo segundo, pero CloudTrail
+    siempre les asigna un eventID distinto.
     """
     event_time = _parse_event_time(event.get("event_time"))
     identity = _sanitize_identity(event.get("aws_identity", "unknown"))
     timestamp = event_time.strftime("%Y%m%dT%H%M%SZ")
+    event_id = _short_event_id(raw_event)
 
     return (
         f"reports/iam_identity/{event_time:%Y}/{event_time:%m}/{event_time:%d}/"
-        f"{timestamp}_{identity}"
+        f"{timestamp}_{identity}_{event_id}"
     )
 
 
@@ -61,7 +72,7 @@ def generate_report(
         Dict {"markdown": path, "json": path} con las rutas locales generadas.
         El nombre base sigue report_key_prefix(event).
     """
-    key_prefix = report_key_prefix(event)
+    key_prefix = report_key_prefix(event, raw_event)
     base_name = key_prefix.rsplit("/", 1)[-1]
 
     out_dir = Path(output_dir)
@@ -206,6 +217,19 @@ def _sanitize_identity(identity: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]", "_", name) or "unknown"
 
 
+def _short_event_id(raw_event: dict | None) -> str:
+    """
+    Primeros 8 caracteres del eventID de CloudTrail (único por evento). Si no
+    hay evento crudo disponible (ej. tests unitarios sin raw_event), usa
+    "noeventid" — solo pasa en ese escenario, nunca en producción, donde el
+    eventID siempre lo provee CloudTrail.
+    """
+    event_id = (raw_event or {}).get("eventID")
+    if not event_id:
+        return "noeventid"
+    return re.sub(r"[^A-Za-z0-9]", "", event_id)[:8] or "noeventid"
+
+
 # ── Test standalone ─────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -243,6 +267,10 @@ if __name__ == "__main__":
         "error": None,
     }
 
-    paths = generate_report(test_event, test_agent_result, raw_event={"eventID": "test"}, output_dir="reports")
+    paths = generate_report(
+        test_event, test_agent_result,
+        raw_event={"eventID": "12345678-abcd-ef01-2345-6789abcdef01"},
+        output_dir="reports",
+    )
     print(f"Markdown: {paths['markdown']}")
     print(f"JSON:     {paths['json']}")
