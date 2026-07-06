@@ -1,40 +1,32 @@
 """
-tools/registry.py
-------------------
+agent/tools/registry.py
+------------------------
 Registro de herramientas del agente. Aplica Open/Closed y Dependency Inversion.
 
 ## Por qué existe este módulo
 
-Sin el registry, agregar una nueva tool al agente requeriría modificar agent.py:
-    - importar la nueva clase
-    - agregarla al dict TOOL_FUNCTIONS
-    - agregarla a la lista ALL_TOOLS
-
+Sin el registry, agregar una nueva tool al agente requeriría modificar agent.py.
 Con el registry, agregar una tool es:
     1. Crear la clase que hereda de HoneyTool
-    2. Registrarla en este archivo (o usar auto-discovery)
+    2. Registrarla en build_default_registry()
 
 agent.py no se toca. Eso es Open/Closed.
 
 ## Uso
 
-    from tools.registry import ToolRegistry
-    from tools.cloudtrail_query import CloudTrailQueryTool
+    from agent.tools.registry import ToolRegistry
+    from agent.tools.lookup_ip_reputation import LookupIPReputationTool
 
     registry = ToolRegistry()
-    registry.register(CloudTrailQueryTool())
+    registry.register(LookupIPReputationTool())
 
-    # El agente pide los schemas para pasarle a la Claude API
     schemas = registry.get_definitions()
-
-    # El agente ejecuta una tool por nombre (despacho)
-    result = registry.execute("cloudtrail_query", source_ip="1.2.3.4")
+    result = registry.execute("lookup_ip_reputation", ip="1.2.3.4")
 """
 
 import logging
-from typing import Any
 
-from tools.base import HoneyTool
+from agent.tools.base import HoneyTool
 
 logger = logging.getLogger(__name__)
 
@@ -50,18 +42,13 @@ class ToolRegistry:
     """
 
     def __init__(self) -> None:
-        # Mapa de nombre → instancia de HoneyTool
         self._tools: dict[str, HoneyTool] = {}
 
     def register(self, tool: HoneyTool) -> "ToolRegistry":
         """
         Registra una herramienta en el registry.
 
-        Permite encadenamiento:
-            registry.register(ToolA()).register(ToolB())
-
-        Args:
-            tool: Instancia de cualquier subclase de HoneyTool.
+        Permite encadenamiento: registry.register(ToolA()).register(ToolB())
 
         Raises:
             TypeError: Si el objeto no es una instancia de HoneyTool.
@@ -79,28 +66,11 @@ class ToolRegistry:
         return self
 
     def get_definitions(self) -> list[dict]:
-        """
-        Retorna la lista de schemas JSON para pasarle a la Claude API.
-
-        Returns:
-            Lista de dicts con el formato que espera el parámetro `tools`
-            de client.messages.create().
-        """
+        """Retorna la lista de schemas JSON para pasarle a la Claude API."""
         return [tool.definition for tool in self._tools.values()]
 
     def execute(self, tool_name: str, **kwargs) -> dict:
-        """
-        Ejecuta una tool por nombre con los argumentos dados.
-
-        Usa safe_execute() de HoneyTool, que valida inputs y captura excepciones.
-
-        Args:
-            tool_name: Nombre de la tool a ejecutar (debe coincidir con definition["name"]).
-            **kwargs:  Argumentos que Claude pasó en el tool_use block.
-
-        Returns:
-            Dict con el resultado de la tool, siempre con clave "error".
-        """
+        """Ejecuta una tool por nombre con los argumentos dados (vía safe_execute)."""
         tool = self._tools.get(tool_name)
         if tool is None:
             logger.error("Tool desconocida solicitada: '%s'", tool_name)
@@ -111,7 +81,6 @@ class ToolRegistry:
 
     @property
     def tool_names(self) -> list[str]:
-        """Lista de nombres de tools registradas."""
         return list(self._tools.keys())
 
     def __len__(self) -> int:
@@ -123,21 +92,12 @@ class ToolRegistry:
 
 def build_default_registry() -> ToolRegistry:
     """
-    Construye el registry con las tools predeterminadas del agente.
+    Construye el registry con las tools del MVP.
 
-    Punto de extensión: para agregar una nueva tool al sistema,
-    importarla aquí y agregarla con .register(). No se modifica
-    ningún otro archivo.
+    El alcance del Cap. 4 define una única tool para el agente:
+    lookup_ip_reputation. Agregar herramientas nuevas no requiere tocar
+    agent.py, solo registrarlas acá.
     """
-    from tools.cloudtrail_query import CloudTrailQueryTool
-    from tools.iam_user_history import IAMUserHistoryTool
-    from tools.ip_reputation_lookup import IPReputationLookupTool
-    from tools.send_alert import SendAlertTool
+    from agent.tools.lookup_ip_reputation import LookupIPReputationTool
 
-    return (
-        ToolRegistry()
-        .register(CloudTrailQueryTool())
-        .register(IAMUserHistoryTool())
-        .register(IPReputationLookupTool())
-        .register(SendAlertTool())
-    )
+    return ToolRegistry().register(LookupIPReputationTool())

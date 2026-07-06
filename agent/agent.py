@@ -1,13 +1,15 @@
 """
-agent.py
----------
+agent/agent.py
+---------------
 Agente LLM central de HoneyAgent.
 
-Implementa el loop de tool use (function calling) de la Claude API.
-Cuando un honeypot es activado, este agente:
+Implementa el loop de tool use (function calling) de la Claude API sobre el
+evento capturado por el honeypot de identidad (IAM). Cuando el pipeline de
+detección (CloudTrail → EventBridge → Lambda) dispara al agente:
 
-  1. Recibe el evento de CloudTrail (vía Lambda o directamente).
-  2. Le pide a Claude que analice el evento usando las tools registradas.
+  1. Recibe el resumen estructurado del evento (ver agent/lambda_handler.py).
+  2. Le pide a Claude que razone explícitamente sobre el evento, con
+     posibilidad de invocar `lookup_ip_reputation` antes de concluir.
   3. Ejecuta las tools que Claude solicita vía el ToolRegistry.
   4. Devuelve los resultados a Claude para que continúe el razonamiento.
   5. Repite hasta que Claude emite stop_reason == "end_turn".
@@ -15,34 +17,12 @@ Cuando un honeypot es activado, este agente:
 ## Principios SOLID aplicados
 
 **S — Single Responsibility**
-    HoneyAgent solo orquesta el loop de tool use.
-    La lógica de cada herramienta vive en su propia clase (tools/).
-    El registro de herramientas vive en ToolRegistry.
+    HoneyAgent solo orquesta el loop de tool use. La lógica de cada
+    herramienta vive en su propia clase (agent/tools/).
 
 **D — Dependency Inversion**
-    HoneyAgent recibe un ToolRegistry en su constructor.
-    No importa ni conoce CloudTrailQueryTool, IAMUserHistoryTool, etc.
-    Para testear: se puede pasar un registry con tools mock.
-
-## Diagrama del loop
-
-  evento
-    │
-    ▼
-  [HoneyAgent.__init__]  ← recibe ToolRegistry por DI
-    │
-    ▼
-  [run(event)]
-    │
-    ├─ construye mensaje inicial
-    │
-    └─ loop:
-         ├─ llama a Claude API con historial + tools
-         ├─ si stop_reason == "end_turn" → fin
-         └─ si stop_reason == "tool_use":
-              ├─ para cada tool_use block:
-              │    └─ registry.execute(tool_name, **args)
-              └─ agrega resultados al historial → siguiente iteración
+    HoneyAgent recibe un ToolRegistry en su constructor y no conoce las
+    implementaciones concretas de las tools.
 """
 
 import json
@@ -53,7 +33,7 @@ from datetime import datetime, timezone
 import anthropic
 from dotenv import load_dotenv
 
-from tools.registry import ToolRegistry, build_default_registry
+from agent.tools.registry import ToolRegistry, build_default_registry
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -61,36 +41,53 @@ logger = logging.getLogger(__name__)
 # Máximo de iteraciones del loop (safety net contra bucles infinitos)
 MAX_ITERATIONS = 10
 
-SYSTEM_PROMPT = """Eres HoneyAgent, un agente especializado en análisis de seguridad para AWS.
+# El razonamiento textual completo (qué observó, qué buscó y por qué, cómo
+# cambió su evaluación, conclusión) debe quedar tal cual en la respuesta final:
+# ese texto es el que report_generator.py vuelca en el Markdown, sin resumir.
+SYSTEM_PROMPT = """Eres HoneyAgent, un agente de análisis de amenazas para un honeypot de \
+identidad (IAM) desplegado en AWS.
 
-Tu rol es investigar eventos de seguridad detectados por honeypots en la infraestructura AWS
-y determinar si representan una amenaza real.
+## Contexto regulatorio
+
+El informe que redactes es un artefacto de trazabilidad de seguridad. Debe contener \
+suficiente detalle como para evaluarse contra dos marcos:
+- PCI DSS v4.0.1 (requisitos de detección, respuesta y documentación de incidentes).
+- Comunicación "A" 8398 del BCRA (gestión de incidentes de ciberseguridad en entidades \
+financieras).
+No implementes controles de estos marcos: solo asegurate de que el informe documente \
+el evento, la investigación y la conclusión con el nivel de detalle que un auditor \
+de cualquiera de los dos marcos esperaría encontrar.
+
+## Qué recibís
+
+Un resumen estructurado de un evento de CloudTrail: identidad invocadora, operación, \
+servicio, parámetros relevantes, IP de origen, momento y resultado. La identidad \
+invocadora es siempre el usuario IAM señuelo (activo señuelo): nunca debería \
+autenticarse legítimamente, así que el evento en sí ya es la señal de compromiso.
 
 ## Proceso de análisis
 
-Cuando recibas un evento de honeypot, debes:
+1. Observá el evento: qué operación se intentó, desde qué IP, con qué resultado.
+2. Decidí si necesitás enriquecer el origen con `lookup_ip_reputation` (país, ISP, \
+organización) para evaluar si es compatible con un uso legítimo o no.
+3. Concluí con un veredicto de severidad (low | medium | high | critical) y una \
+recomendación concreta.
 
-1. **Verificar la IP de origen** con `ip_reputation_lookup` para saber si es un actor malicioso conocido.
-2. **Consultar CloudTrail** con `cloudtrail_query` para ver qué otras acciones realizó esa IP o usuario.
-3. **Analizar el usuario IAM** con `iam_user_history` si hay un usuario involucrado.
-4. **Enviar la alerta** con `send_alert` incluyendo tu análisis completo.
+## Formato de la respuesta final
 
-## Criterios de severidad
+Exponé tu razonamiento de forma explícita y trazable, con estas secciones exactas \
+(en español), usando ese texto tal cual (sin resumirlo después):
 
-- **critical**: acceso a recursos críticos + IP maliciosa conocida, O intento de deshabilitar CloudTrail.
-- **high**: acceso a honeypot + IP sospechosa O usuario IAM comprometido.
-- **medium**: acceso a honeypot desde IP desconocida (sin historial de abuso).
-- **low**: acceso a honeypot desde IP interna o sin señales adicionales de compromiso.
+- **Qué observé**: descripción del evento.
+- **Qué busqué y por qué**: qué herramienta invocaste (si alguna) y qué esperabas \
+confirmar o descartar con ese dato.
+- **Cómo cambió mi evaluación**: cómo el resultado de la herramienta (o su ausencia) \
+modificó o confirmó tu hipótesis inicial.
+- **Veredicto**: severidad (low | medium | high | critical) y justificación.
+- **Recomendación**: acciones concretas para el equipo de seguridad (ej. revocar \
+las credenciales del usuario señuelo, revisar el resto de la sesión del atacante).
 
-## Formato del análisis (campo 'analysis' de send_alert)
-
-Escribe el análisis en español, con estas secciones:
-- **Qué ocurrió**: descripción del evento.
-- **Indicadores de amenaza**: IP score, historial del usuario, patrones en CloudTrail.
-- **Nivel de riesgo**: justificación de la severidad elegida.
-- **Acciones recomendadas**: pasos concretos para el equipo de seguridad.
-
-Sé directo y técnico. Este análisis va al equipo de seguridad, no al usuario final."""
+Sé directo y técnico. Este análisis va a un equipo de seguridad, no al usuario final."""
 
 
 class HoneyAgent:
@@ -111,13 +108,22 @@ class HoneyAgent:
         """
         Args:
             registry:       Registry con las tools disponibles para el agente.
-            model:          Modelo Claude a usar. Si es None, usa AGENT_MODEL del entorno.
+            model:          ID de modelo Bedrock a usar. Si es None, usa AGENT_MODEL del entorno.
             max_iterations: Límite de iteraciones del loop (default: 10).
         """
         self._registry = registry
-        self._model = model or os.getenv("AGENT_MODEL", "claude-sonnet-4-6")
+        # AGENT_MODEL default: Claude Sonnet 4.5 vía Bedrock. Los modelos Haiku
+        # (más económicos) requieren completar un formulario de "intended use
+        # case" en la consola de Bedrock antes de poder invocarse — ver nota en
+        # README.md. Sonnet 4.5 funciona sin ese trámite y su costo sigue siendo
+        # marginal para el volumen de eventos de este MVP.
+        self._model = model or os.getenv("AGENT_MODEL", "us.anthropic.claude-sonnet-4-5-20250929-v1:0")
         self._max_iterations = max_iterations
-        self._client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+        # Se usa Amazon Bedrock en vez de la API directa de Anthropic: reutiliza
+        # las credenciales/rol de IAM ya presentes (operador local o rol de
+        # ejecución de la Lambda), sin necesitar una ANTHROPIC_API_KEY ni guardar
+        # ese secret en Secrets Manager.
+        self._client = anthropic.AnthropicBedrock(aws_region=os.getenv("AWS_REGION", "us-east-1"))
 
         logger.info(
             "HoneyAgent inicializado | modelo: %s | tools: %s",
@@ -126,17 +132,18 @@ class HoneyAgent:
 
     def run(self, event: dict) -> dict:
         """
-        Ejecuta el agente sobre un evento de honeypot.
+        Ejecuta el agente sobre el resumen estructurado de un evento del honeypot.
 
         Args:
-            event: Datos del evento de CloudTrail/EventBridge.
-                   Campos esperados: honeypot_name, event_name, source_ip,
-                   aws_user, event_time, aws_region, resources.
+            event: Resumen del evento (ver agent/lambda_handler.py::summarize_event).
+                   Campos esperados: honeypot_name, event_name, event_source,
+                   source_ip, aws_identity, event_time, aws_region, parameters,
+                   result.
 
         Returns:
             Dict con:
                 - success        : True si el agente completó el análisis
-                - final_analysis : texto final (respuesta end_turn de Claude)
+                - final_analysis : texto final con el razonamiento explícito
                 - tools_called   : lista de {tool, input} por iteración
                 - iterations     : cantidad de iteraciones del loop
                 - error          : mensaje de error si falló (None si OK)
@@ -148,7 +155,6 @@ class HoneyAgent:
 
         messages = [{"role": "user", "content": self._build_initial_message(event)}]
         tools_called: list[dict] = []
-        final_analysis = ""
 
         for iteration in range(1, self._max_iterations + 1):
             logger.info("Iteración %d/%d", iteration, self._max_iterations)
@@ -161,7 +167,6 @@ class HoneyAgent:
                 messages=messages,
             )
 
-            # Agregar la respuesta de Claude al historial
             messages.append({"role": "assistant", "content": response.content})
 
             if response.stop_reason == "end_turn":
@@ -177,7 +182,6 @@ class HoneyAgent:
             logger.warning("stop_reason inesperado: %s", response.stop_reason)
             break
 
-        # Loop excedió el límite
         logger.warning("Límite de %d iteraciones alcanzado.", self._max_iterations)
         return self._success_result(
             f"[Análisis incompleto: límite de {self._max_iterations} iteraciones alcanzado]",
@@ -186,16 +190,7 @@ class HoneyAgent:
         )
 
     def _dispatch_tools(self, content: list, tools_called: list) -> list[dict]:
-        """
-        Ejecuta todas las tools solicitadas por Claude en un bloque tool_use.
-
-        Args:
-            content:      Lista de bloques de la respuesta de Claude.
-            tools_called: Lista acumuladora para el reporte final (modificada in-place).
-
-        Returns:
-            Lista de tool_result blocks listos para incluir en el historial.
-        """
+        """Ejecuta todas las tools solicitadas por Claude en un bloque tool_use."""
         results = []
         for block in content:
             if block.type != "tool_use":
@@ -217,15 +212,18 @@ class HoneyAgent:
 
     def _build_initial_message(self, event: dict) -> str:
         return (
-            f"Se detectó actividad sospechosa en un honeypot de AWS. Analiza el siguiente evento:\n\n"
+            f"Se detectó actividad en el honeypot de identidad (IAM). Analiza el "
+            f"siguiente evento:\n\n"
             f"**Honeypot activado**: {event.get('honeypot_name', 'desconocido')}\n"
-            f"**Evento CloudTrail**: {event.get('event_name', 'desconocido')}\n"
+            f"**Servicio/operación**: {event.get('event_source', 'desconocido')} / "
+            f"{event.get('event_name', 'desconocido')}\n"
             f"**IP de origen**: {event.get('source_ip', 'desconocida')}\n"
-            f"**Usuario/Rol IAM**: {event.get('aws_user', 'desconocido')}\n"
+            f"**Identidad invocadora**: {event.get('aws_identity', 'desconocida')}\n"
             f"**Hora del evento**: {event.get('event_time', datetime.now(timezone.utc).isoformat())}\n"
             f"**Región**: {event.get('aws_region', 'us-east-1')}\n"
-            f"**Recursos afectados**: {json.dumps(event.get('resources', []), ensure_ascii=False)}\n\n"
-            f"Investiga este evento usando las herramientas disponibles y envía una alerta al equipo."
+            f"**Parámetros relevantes**: {json.dumps(event.get('parameters', {}), ensure_ascii=False)}\n"
+            f"**Resultado de la operación**: {event.get('result', 'desconocido')}\n\n"
+            f"Investigá este evento y redactá tu análisis en el formato solicitado."
         )
 
     def _extract_text(self, content: list) -> str:
@@ -268,13 +266,15 @@ if __name__ == "__main__":
     os.environ["HONEYAGENT_MOCK"] = "true"
 
     test_event = {
-        "honeypot_name": "hp-fake-credentials-bucket",
-        "event_name":    "GetObject",
+        "honeypot_name": "hp-billing-readonly",
+        "event_source":  "sts.amazonaws.com",
+        "event_name":    "GetCallerIdentity",
         "source_ip":     "203.0.113.42",
-        "aws_user":      "hp-admin-backup-user",
+        "aws_identity":  "arn:aws:iam::123456789012:user/billing-readonly",
         "event_time":    datetime.now(timezone.utc).isoformat(),
         "aws_region":    "us-east-1",
-        "resources":     ["arn:aws:s3:::hp-fake-credentials-bucket/credentials/aws_keys_backup.csv"],
+        "parameters":    {},
+        "result":        "success",
     }
 
     print("=" * 60)
@@ -286,7 +286,7 @@ if __name__ == "__main__":
 
     print(f"\nIteraciones: {result['iterations']}")
     print(f"Tools usadas: {[t['tool'] for t in result['tools_called']]}")
-    print(f"\n--- Análisis final ---")
+    print("\n--- Análisis final ---")
     print(result["final_analysis"])
 
     sys.exit(0 if result["success"] else 1)

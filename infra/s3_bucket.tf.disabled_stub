@@ -1,0 +1,64 @@
+# infra/s3_bucket.tf.disabled_stub
+#
+# Documenta cómo se extendería el patrón al honeypot type=s3_bucket
+# (hp-fake-credentials-bucket en honeypots.yaml, enabled: false).
+#
+# Este archivo NO termina en ".tf": Terraform lo ignora por completo, así que
+# no se aprovisiona ningún recurso real. Si en un trabajo futuro se habilita
+# este tipo de honeypot, el patrón es:
+#
+#   1. Renombrar este archivo a "s3_bucket.tf".
+#   2. Cambiar `enabled: false` a `enabled: true` en honeypots.yaml.
+#   3. Sumar una regla de EventBridge equivalente a la de infra/eventbridge.tf,
+#      pero matcheando `requestParameters.bucketName` en vez de `userIdentity`.
+#
+# No se modifica agent/agent.py ni el pipeline de detección: el mismo
+# lambda_handler.py y el mismo agente sirven para cualquier tipo de honeypot,
+# porque ambos trabajan sobre el resumen estructurado del evento, no sobre el
+# tipo de recurso que lo generó.
+
+locals {
+  s3_bucket_honeypots = {
+    for hp in local.all_honeypots : hp.name => hp
+    if hp.type == "s3_bucket" && hp.enabled
+  }
+}
+
+resource "aws_s3_bucket" "honeypot" {
+  for_each = local.s3_bucket_honeypots
+
+  bucket        = "${local.prefix}-${each.key}-${local.account_id}"
+  force_destroy = true
+}
+
+resource "aws_s3_bucket_public_access_block" "honeypot" {
+  for_each = local.s3_bucket_honeypots
+
+  bucket = aws_s3_bucket.honeypot[each.key].id
+
+  block_public_acls       = lookup(each.value.config, "block_public_access", true)
+  block_public_policy     = lookup(each.value.config, "block_public_access", true)
+  ignore_public_acls      = lookup(each.value.config, "block_public_access", true)
+  restrict_public_buckets = lookup(each.value.config, "block_public_access", true)
+}
+
+resource "aws_s3_object" "honeypot_object" {
+  for_each = {
+    for pair in flatten([
+      for hp_name, hp in local.s3_bucket_honeypots : [
+        for obj in hp.config.objects : {
+          key     = "${hp_name}::${obj.key}"
+          bucket  = hp_name
+          obj_key = obj.key
+          content = obj.content
+        }
+      ]
+    ]) : pair.key => pair
+  }
+
+  bucket  = aws_s3_bucket.honeypot[each.value.bucket].id
+  key     = each.value.obj_key
+  content = each.value.content
+
+  tags = { HoneyAgent = "true", HoneypotFile = "true" }
+}

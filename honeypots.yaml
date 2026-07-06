@@ -1,40 +1,67 @@
 # honeypots.yaml
-# Configuración declarativa de los honeypots desplegados en AWS.
+# Configuración declarativa de los honeypots (activos señuelo) del prototipo.
 #
-# Cada entrada define un recurso AWS "trampa" diseñado para atraer actividad
-# maliciosa. El agente LLM monitorea accesos a estos recursos y responde
-# automáticamente analizando el contexto del evento con herramientas de AWS.
+# Alcance del MVP (Cap. 4 del TFC): el patrón de honeypot de identidad (IAM) se
+# implementa de punta a punta. Los tres tipos restantes (s3_bucket, secrets_manager,
+# rds_endpoint) quedan documentados con `enabled: false`: el esquema está completo
+# y los stubs de Terraform en infra/ muestran cómo se extendería el patrón sin
+# alterar el pipeline de detección ni el agente.
 #
-# Campos comunes:
-#   name        → nombre del recurso en AWS (también usado como ID interno)
-#   type        → tipo de honeypot (define qué recurso Terraform crea)
-#   enabled     → permite deshabilitar sin borrar la config
-#   severity    → niveles: low | medium | high | critical
-#   description → explicación para el reporte del agente
-#   config      → parámetros específicos del tipo de honeypot
-#   alerts      → qué eventos de CloudTrail disparan al agente
+# Campos comunes a todo honeypot:
+#   type        → iam_identity | s3_bucket | secrets_manager | rds_endpoint
+#   name        → identificador del honeypot (también usado como ID interno)
+#   enabled     → si el honeypot se aprovisiona en infra/ (solo iam_identity en el MVP)
+#   description → contexto para el reporte del agente
+#   config      → parámetros específicos del tipo
 
 honeypots:
 
-  # ── S3 Bucket honeypot ──────────────────────────────────────────────────────
-  # Simula un bucket con datos sensibles (credenciales, backups, configs).
-  # En producción legítima nadie debería acceder a este bucket.
-  # Cualquier GetObject / ListBucket es señal de reconocimiento o exfiltración.
-  - name: hp-fake-credentials-bucket
-    type: s3_bucket
+  # ── Honeypot de identidad (IAM) — único tipo implementado en el MVP ────────────
+  # Usuario IAM con nombre verosímil de una cuenta de automatización de bajo perfil.
+  # Nunca debería autenticarse: cualquier uso de sus credenciales es la señal de
+  # que un atacante encontró una fuga de secretos (repo público, CI mal configurado,
+  # laptop comprometida, etc.) y las está probando.
+  - type: iam_identity
+    name: hp-billing-readonly
     enabled: true
-    severity: high
-    description: "Bucket con objetos que simulan credenciales y dumps de base de datos"
+    description: >
+      Usuario IAM señuelo que simula una cuenta de automatización de solo lectura
+      para facturación. Cualquier actividad con sus credenciales indica que fueron
+      comprometidas (activo señuelo).
+    username: billing-readonly
     config:
-      # Objetos señuelo con nombres atractivos para atacantes
+      # Política mínima: de solo lectura, para que ninguna acción real tenga efecto
+      # aunque el atacante intente usarla.
+      attach_policy_arn: "arn:aws:iam::aws:policy/ReadOnlyAccess"
+      # Credenciales de acceso de larga duración, generadas por Terraform pero
+      # nunca usadas legítimamente. Se guardan en Secrets Manager para que
+      # scripts/simulate_attack.py pueda leerlas y disparar el escenario simulado.
+      create_access_key: true
+      tags:
+        Purpose: honeypot
+        HoneyAgent: "true"
+    alerts:
+      # Cualquier llamada de API con estas credenciales es sospechosa.
+      on_events:
+        - "*"
+
+  # ── S3 Bucket — documentado, NO implementado en el MVP ─────────────────────────
+  # Simularía un bucket con objetos señuelo (credenciales, backups). Se deja el
+  # esquema completo y el stub en infra/s3_bucket.tf.disabled_stub para mostrar
+  # cómo se extendería el patrón sin desplegar nada real.
+  - type: s3_bucket
+    name: hp-fake-credentials-bucket
+    enabled: false
+    description: >
+      Bucket con objetos que simulan credenciales y dumps de base de datos.
+      Cualquier GetObject/ListBucket sería señal de reconocimiento o exfiltración.
+    config:
       objects:
         - key: "credentials/aws_keys_backup.csv"
           content: "FAKE_ACCESS_KEY,FAKE_SECRET_KEY"
-        - key: "db/prod_dump_2024.sql.gz"
+        - key: "db/prod_dump.sql.gz"
           content: "-- FAKE DATABASE DUMP --"
-        - key: "config/terraform.tfvars"
-          content: "# FAKE TERRAFORM VARS"
-      block_public_access: true   # no es público; cualquier acceso = insider o compromiso
+      block_public_access: true
       versioning: false
     alerts:
       on_events:
@@ -43,40 +70,18 @@ honeypots:
         - DeleteObject
         - ListBucket
 
-  # ── IAM User honeypot ────────────────────────────────────────────────────────
-  # Usuario IAM inactivo con nombre atractivo ("admin", "backup").
-  # No debe autenticarse nunca. Cualquier uso de sus credenciales indica
-  # que alguien encontró sus access keys (fuga de secretos, credential stuffing, etc.)
-  - name: hp-admin-backup-user
-    type: iam_user
-    enabled: true
-    severity: critical
-    description: "Usuario IAM inactivo que simula una cuenta de administrador de respaldo"
+  # ── Secrets Manager — documentado, NO implementado en el MVP ────────────────────
+  # Secret con nombre llamativo (simula password de producción). Un GetSecretValue
+  # indicaría post-compromiso: el atacante ya tiene acceso y busca credenciales
+  # de base de datos.
+  - type: secrets_manager
+    name: hp-prod-db-password
+    enabled: false
+    description: >
+      Secret falso que simula la contraseña maestra de la base de datos de
+      producción.
     config:
-      create_access_key: true      # key generada y guardada en Secrets Manager (no en código)
-      attach_policies:
-        - arn:aws:iam::aws:policy/ReadOnlyAccess   # permisos reales pero de solo lectura
-      tags:
-        Purpose: "honeypot"
-        HoneyAgent: "true"
-    alerts:
-      on_events:
-        - ConsoleLogin
-        - AssumeRole
-        - CreateAccessKey
-        - "*"    # cualquier llamada API con estas credenciales es sospechosa
-
-  # ── Secrets Manager honeypot ─────────────────────────────────────────────────
-  # Secret con nombre llamativo (simula password de producción).
-  # Un GetSecretValue en este secret indica post-compromiso: el atacante
-  # ya tiene acceso a la cuenta y está buscando credenciales de base de datos.
-  - name: hp-prod-db-password
-    type: secrets_manager_secret
-    enabled: true
-    severity: high
-    description: "Secret falso que simula la contraseña maestra de la base de datos de producción"
-    config:
-      secret_value: "FAKE_SUPER_SECRET_PASSWORD_DO_NOT_USE_honeyagent"
+      secret_value: "FAKE_SUPER_SECRET_PASSWORD_DO_NOT_USE"
       description: "prod/database/master - DO NOT DELETE"
     alerts:
       on_events:
@@ -85,41 +90,42 @@ honeypots:
         - DeleteSecret
         - PutSecretValue
 
-  # ── CloudTrail tampering monitor ─────────────────────────────────────────────
-  # No crea un recurso nuevo; monitorea el trail existente.
-  # StopLogging / DeleteTrail son las primeras acciones de un atacante avanzado
-  # que quiere eliminar evidencia. Severidad crítica: indica compromiso activo.
-  - name: hp-cloudtrail-tampering
-    type: cloudtrail_monitor
-    enabled: true
-    severity: critical
-    description: "Detecta intentos de deshabilitar o borrar CloudTrail (táctica de evasión post-compromiso)"
-    config: {}
+  # ── RDS Endpoint — documentado, NO implementado en el MVP ───────────────────────
+  # Instancia RDS mínima con nombre de producción. Un intento de conexión (o de
+  # describir/modificar la instancia) indicaría reconocimiento activo sobre la
+  # capa de datos.
+  - type: rds_endpoint
+    name: hp-prod-db-endpoint
+    enabled: false
+    description: >
+      Endpoint RDS señuelo que simula la base de datos de producción.
+    config:
+      engine: postgres
+      instance_class: db.t3.micro
+      db_name: "prod_customers"
     alerts:
       on_events:
-        - StopLogging
-        - DeleteTrail
-        - UpdateTrail
-        - PutEventSelectors
-        - DeleteEventDataStore
+        - DescribeDBInstances
+        - ModifyDBInstance
+        - "AuthenticateDatabaseAccess"
 
-# ── Configuración global del framework ─────────────────────────────────────────
-settings:
-  aws_region: "us-east-1"
+# ── Pipeline de detección ───────────────────────────────────────────────────────
+detection:
+  audit_source: cloudtrail       # AWS CloudTrail: fuente de auditoría (eventos de administración)
+  routing_engine: eventbridge    # Amazon EventBridge: motor de enrutamiento de eventos
+  executor: lambda               # AWS Lambda: función ejecutora que invoca al agente
+  complementary_layer:
+    # GuardDuty se describe en el TFC como capa complementaria, en paralelo a la
+    # cadena principal CloudTrail → EventBridge → Lambda. Fuera de alcance del MVP.
+    name: guardduty
+    enabled: false
 
-  # Nombre del trail de CloudTrail creado por Terraform
-  cloudtrail_name: "honeyagent-trail"
-
-  # Bucket donde CloudTrail escribe los logs (creado por Terraform)
-  log_bucket: "honeyagent-logs-${account_id}"   # el account_id se resuelve en Terraform
-
-  # Modelo de Claude usado por el agente LLM
-  # claude-haiku-4-5 para demos rápidas / claude-sonnet-4-6 para análisis completo
-  agent_model: "claude-sonnet-4-6"
-
-  # Tiempo mínimo entre alertas del mismo origen (evita spam por el mismo IP/usuario)
-  alert_cooldown_minutes: 15
-
-  # Nombre del secret en Secrets Manager que contiene el webhook de Slack
-  # El valor real se configura manualmente en AWS, nunca en este archivo
-  slack_webhook_secret: "honeyagent/slack/webhook"
+# ── Configuración del agente LLM ────────────────────────────────────────────────
+agent:
+  # El modelo de Claude se resuelve desde esta variable de entorno (ver .env.example)
+  model_env_var: AGENT_MODEL
+  tools:
+    - lookup_ip_reputation
+  output_format: markdown+json
+  # Bucket S3 destino de los reportes generados por el agente (creado en infra/main.tf)
+  reports_bucket: "honeyagent-reports-${account_id}"

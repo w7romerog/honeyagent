@@ -1,13 +1,12 @@
 """
-tools/base.py
---------------
+agent/tools/base.py
+--------------------
 Define la interfaz abstracta que toda tool del agente debe implementar.
 
 ## Principios SOLID aplicados
 
 **S — Single Responsibility**
-    Cada subclase tiene una única responsabilidad (consultar CloudTrail,
-    verificar reputación de IP, etc.). Esta clase base no hace nada por sí sola.
+    Cada subclase tiene una única responsabilidad. Esta clase base no hace nada por sí sola.
 
 **O — Open/Closed**
     El agente está abierto a recibir nuevas tools sin modificar su código.
@@ -19,11 +18,9 @@ Define la interfaz abstracta que toda tool del agente debe implementar.
 
 **I — Interface Segregation**
     La interfaz es mínima: solo dos miembros obligatorios (execute, definition).
-    Las tools no están forzadas a implementar métodos que no necesitan.
 
 **D — Dependency Inversion**
-    HoneyAgent depende de esta abstracción, no de CloudTrailQueryTool ni de
-    ninguna implementación concreta.
+    HoneyAgent depende de esta abstracción, no de ninguna implementación concreta.
 """
 
 from abc import ABC, abstractmethod
@@ -89,7 +86,6 @@ class HoneyTool(ABC):
           2. Los tipos básicos son correctos.
           3. Las excepciones no propagadas no rompen el loop del agente.
         """
-        # Validar campos requeridos según el schema de la tool
         required_fields = self.definition.get("input_schema", {}).get("required", [])
         missing = [f for f in required_fields if f not in kwargs]
         if missing:
@@ -98,7 +94,6 @@ class HoneyTool(ABC):
                 "result": None,
             }
 
-        # Validar tipos de los campos string (previene injection en queries)
         properties = self.definition.get("input_schema", {}).get("properties", {})
         for field, value in kwargs.items():
             expected_type = properties.get(field, {}).get("type")
@@ -108,7 +103,6 @@ class HoneyTool(ABC):
                     "result": None,
                 }
             if expected_type == "integer" and not isinstance(value, int):
-                # Intentar coercionar si viene como float o string numérico
                 try:
                     kwargs[field] = int(value)
                 except (ValueError, TypeError):

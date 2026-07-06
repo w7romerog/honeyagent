@@ -1,24 +1,21 @@
 """
 tests/test_agent.py
 --------------------
-Tests de integración end-to-end de HoneyAgent.
+Tests del MVP de HoneyAgent (Cap. 4 — honeypot de identidad).
 
 Qué se verifica:
-  1. Que cada tool funciona correctamente en modo mock.
-  2. Que el ToolRegistry registra tools y despacha correctamente.
-  3. Que el loop del agente completa el análisis con un evento real de Claude API.
-  4. Que el report_generator produce archivos válidos.
-  5. Que el lambda_handler procesa un evento y retorna HTTP 200.
+  1. La tool lookup_ip_reputation funciona en modo mock.
+  2. El ToolRegistry registra y despacha correctamente.
+  3. agent/config.py valida el esquema de honeypots.yaml.
+  4. El loop del agente completa el análisis con un evento real de Claude API
+     (tests de integración, no corren en CI por defecto).
+  5. report_generator produce Markdown + JSON con las secciones fijas y la
+     convención de nombres esperadas.
+  6. lambda_handler traduce el evento de CloudTrail y responde 200/500.
 
 Cómo correr:
-    # Todos los tests (modo mock, sin AWS ni APIs externas)
-    HONEYAGENT_MOCK=true python -m pytest tests/ -v
-
-    # Solo tests unitarios (sin Claude API)
-    HONEYAGENT_MOCK=true python -m pytest tests/ -v -m "not integration"
-
-    # Test del agente completo con Claude API real (requiere ANTHROPIC_API_KEY)
-    HONEYAGENT_MOCK=true python -m pytest tests/ -v -m integration
+    HONEYAGENT_MOCK=true python -m pytest tests/ -v -m unit
+    HONEYAGENT_MOCK=true python -m pytest tests/ -v -m integration   # requiere credenciales AWS con acceso a Bedrock
 
 Convención de marcadores:
     @pytest.mark.unit        → sin dependencias externas
@@ -34,10 +31,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-# Asegurar que el módulo raíz esté en el path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-# Activar modo mock para todas las tools durante los tests
 os.environ.setdefault("HONEYAGENT_MOCK", "true")
 
 
@@ -46,166 +41,77 @@ os.environ.setdefault("HONEYAGENT_MOCK", "true")
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @pytest.fixture
-def s3_event():
-    """Evento de acceso al bucket S3 honeypot."""
-    path = Path(__file__).parent / "mock_events" / "s3_access.json"
-    with open(path) as f:
-        return json.load(f)
+def iam_identity_event():
+    """Resumen estructurado de un evento del honeypot de identidad (ver agent/agent.py)."""
+    return {
+        "honeypot_name": "hp-billing-readonly",
+        "event_source":  "sts.amazonaws.com",
+        "event_name":    "GetCallerIdentity",
+        "source_ip":     "203.0.113.42",
+        "aws_identity":  "arn:aws:iam::123456789012:user/billing-readonly",
+        "event_time":    "2024-01-15T03:22:11+00:00",
+        "aws_region":    "us-east-1",
+        "parameters":    {},
+        "result":        "success",
+    }
 
 
 @pytest.fixture
-def iam_event():
-    """Evento de uso del IAM user honeypot."""
-    path = Path(__file__).parent / "mock_events" / "iam_activity.json"
-    with open(path) as f:
-        return json.load(f)
-
-
-@pytest.fixture
-def cloudtrail_event():
-    """Evento de tampering de CloudTrail."""
-    path = Path(__file__).parent / "mock_events" / "cloudtrail_tampering.json"
-    with open(path) as f:
-        return json.load(f)
+def eventbridge_event():
+    """Evento tal como lo entrega EventBridge (detalle crudo de CloudTrail)."""
+    return {
+        "honeypot_name": "hp-billing-readonly",
+        "detail": {
+            "eventSource":     "sts.amazonaws.com",
+            "eventName":       "GetCallerIdentity",
+            "sourceIPAddress": "203.0.113.42",
+            "userIdentity":    {"arn": "arn:aws:iam::123456789012:user/billing-readonly"},
+            "eventTime":       "2024-01-15T03:22:11+00:00",
+            "awsRegion":       "us-east-1",
+            "requestParameters": {},
+        },
+    }
 
 
 @pytest.fixture
 def default_registry():
-    """Registry con todas las tools en modo mock."""
-    from tools.registry import build_default_registry
+    from agent.tools.registry import build_default_registry
     return build_default_registry()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Tests unitarios — Tools individuales
+# Tests unitarios — lookup_ip_reputation
 # ═══════════════════════════════════════════════════════════════════════════════
 
-class TestCloudTrailQueryTool:
+class TestLookupIPReputationTool:
 
     @pytest.mark.unit
-    def test_execute_con_ip_retorna_eventos(self):
-        from tools.cloudtrail_query import CloudTrailQueryTool
-        tool = CloudTrailQueryTool()
-        result = tool.safe_execute(source_ip="203.0.113.42")
+    def test_execute_retorna_perfil_en_modo_mock(self):
+        from agent.tools.lookup_ip_reputation import LookupIPReputationTool
+        tool = LookupIPReputationTool()
+        result = tool.safe_execute(ip="203.0.113.42")
 
         assert result["error"] is None
-        assert result["total_found"] > 0
-        assert isinstance(result["events"], list)
-        assert all("event_name" in e for e in result["events"])
+        assert result["ip"] == "203.0.113.42"
+        assert result["country_code"]
+        assert result["isp"]
 
     @pytest.mark.unit
-    def test_execute_sin_parametros_retorna_error(self):
-        from tools.cloudtrail_query import CloudTrailQueryTool
-        tool = CloudTrailQueryTool()
+    def test_campo_ip_requerido(self):
+        from agent.tools.lookup_ip_reputation import LookupIPReputationTool
+        tool = LookupIPReputationTool()
         result = tool.safe_execute()
-
-        # Sin IP ni username, debe informar el error sin explotar
         assert result["error"] is not None
 
     @pytest.mark.unit
     def test_definition_tiene_campos_requeridos(self):
-        from tools.cloudtrail_query import CloudTrailQueryTool
-        tool = CloudTrailQueryTool()
+        from agent.tools.lookup_ip_reputation import LookupIPReputationTool
+        tool = LookupIPReputationTool()
         defn = tool.definition
 
-        assert defn["name"] == "cloudtrail_query"
+        assert defn["name"] == "lookup_ip_reputation"
         assert "description" in defn
-        assert "input_schema" in defn
-        assert defn["input_schema"]["type"] == "object"
-
-
-class TestIAMUserHistoryTool:
-
-    @pytest.mark.unit
-    def test_execute_retorna_perfil_completo(self):
-        from tools.iam_user_history import IAMUserHistoryTool
-        tool = IAMUserHistoryTool()
-        result = tool.safe_execute(username="hp-admin-backup-user")
-
-        assert result["error"] is None
-        assert result["user_info"]["username"] == "hp-admin-backup-user"
-        assert len(result["access_keys"]) > 0
-        assert len(result["risk_signals"]) > 0
-
-    @pytest.mark.unit
-    def test_honeypot_detectado_en_risk_signals(self):
-        from tools.iam_user_history import IAMUserHistoryTool
-        tool = IAMUserHistoryTool()
-        result = tool.safe_execute(username="hp-admin-backup-user")
-
-        honeypot_signals = [s for s in result["risk_signals"] if "HONEYPOT" in s]
-        assert len(honeypot_signals) > 0, "Debe detectar que el usuario es un honeypot"
-
-    @pytest.mark.unit
-    def test_campo_requerido_faltante(self):
-        from tools.iam_user_history import IAMUserHistoryTool
-        tool = IAMUserHistoryTool()
-        # username es required — safe_execute debe retornar error
-        result = tool.safe_execute()
-        assert result["error"] is not None
-        assert "username" in result["error"]
-
-
-class TestIPReputationLookupTool:
-
-    @pytest.mark.unit
-    def test_ip_maliciosa_retorna_veredicto_correcto(self):
-        from tools.ip_reputation_lookup import IPReputationLookupTool
-        tool = IPReputationLookupTool()
-        result = tool.safe_execute(ip_address="203.0.113.42")
-
-        assert result["error"] is None
-        assert result["abuse_score"] >= 25
-        assert result["is_malicious"] is True
-        assert result["verdict"] == "MALICIOSA"
-        assert len(result["categories"]) > 0
-
-    @pytest.mark.unit
-    def test_campo_ip_requerido(self):
-        from tools.ip_reputation_lookup import IPReputationLookupTool
-        tool = IPReputationLookupTool()
-        result = tool.safe_execute()
-        assert result["error"] is not None
-
-
-class TestSendAlertTool:
-
-    @pytest.mark.unit
-    def test_envio_mock_exitoso(self):
-        from tools.send_alert import SendAlertTool
-        tool = SendAlertTool()
-        result = tool.safe_execute(
-            honeypot_name="hp-fake-credentials-bucket",
-            severity="high",
-            source_ip="203.0.113.42",
-            aws_user="hp-admin-backup-user",
-            event_name="GetObject",
-            event_time="2024-01-15T03:22:11+00:00",
-            analysis="Test de integración.",
-        )
-
-        assert result["error"] is None
-        assert result["sent"] is True
-
-    @pytest.mark.unit
-    def test_severidad_invalida_no_llega_a_execute(self):
-        """safe_execute valida el enum antes de llamar execute."""
-        from tools.send_alert import SendAlertTool
-        tool = SendAlertTool()
-        # 'ultra-critical' no está en el enum del schema
-        # safe_execute no valida enums (solo tipos), pero execute debe manejar
-        # valores inesperados sin explotar
-        result = tool.safe_execute(
-            honeypot_name="hp-test",
-            severity="ultra-critical",   # valor fuera del enum
-            source_ip="1.2.3.4",
-            aws_user="user",
-            event_name="GetObject",
-            event_time="2024-01-15T00:00:00+00:00",
-            analysis="Test.",
-        )
-        # En modo mock siempre retorna sent=True; verificamos que no explota
-        assert "error" in result
+        assert defn["input_schema"]["required"] == ["ip"]
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -215,17 +121,15 @@ class TestSendAlertTool:
 class TestToolRegistry:
 
     @pytest.mark.unit
-    def test_registro_y_ejecucion(self, default_registry):
-        assert len(default_registry) == 4
-        assert "cloudtrail_query" in default_registry.tool_names
-        assert "iam_user_history" in default_registry.tool_names
-        assert "ip_reputation_lookup" in default_registry.tool_names
-        assert "send_alert" in default_registry.tool_names
+    def test_registro_por_defecto_incluye_solo_lookup_ip_reputation(self, default_registry):
+        """El MVP define una sola tool para el agente."""
+        assert len(default_registry) == 1
+        assert default_registry.tool_names == ["lookup_ip_reputation"]
 
     @pytest.mark.unit
     def test_get_definitions_formato_claude_api(self, default_registry):
         defs = default_registry.get_definitions()
-        assert len(defs) == 4
+        assert len(defs) == 1
         for d in defs:
             assert "name" in d
             assert "description" in d
@@ -239,17 +143,17 @@ class TestToolRegistry:
 
     @pytest.mark.unit
     def test_registro_duplicado_lanza_error(self):
-        from tools.registry import ToolRegistry
-        from tools.cloudtrail_query import CloudTrailQueryTool
+        from agent.tools.registry import ToolRegistry
+        from agent.tools.lookup_ip_reputation import LookupIPReputationTool
 
         registry = ToolRegistry()
-        registry.register(CloudTrailQueryTool())
-        with pytest.raises(ValueError, match="cloudtrail_query"):
-            registry.register(CloudTrailQueryTool())
+        registry.register(LookupIPReputationTool())
+        with pytest.raises(ValueError, match="lookup_ip_reputation"):
+            registry.register(LookupIPReputationTool())
 
     @pytest.mark.unit
     def test_registro_objeto_invalido_lanza_error(self):
-        from tools.registry import ToolRegistry
+        from agent.tools.registry import ToolRegistry
 
         registry = ToolRegistry()
         with pytest.raises(TypeError):
@@ -257,16 +161,71 @@ class TestToolRegistry:
 
     @pytest.mark.unit
     def test_encadenamiento_register(self):
-        from tools.registry import ToolRegistry
-        from tools.cloudtrail_query import CloudTrailQueryTool
-        from tools.iam_user_history import IAMUserHistoryTool
+        from agent.tools.base import HoneyTool
+        from agent.tools.registry import ToolRegistry
 
-        registry = (
-            ToolRegistry()
-            .register(CloudTrailQueryTool())
-            .register(IAMUserHistoryTool())
+        class DummyTool(HoneyTool):
+            @property
+            def definition(self):
+                return {"name": "dummy", "description": "d", "input_schema": {"type": "object", "properties": {}}}
+
+            def execute(self, **kwargs):
+                return {"error": None}
+
+        registry = ToolRegistry().register(DummyTool())
+        assert len(registry) == 1
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Tests unitarios — Config / esquema de honeypots.yaml
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestHoneypotsConfig:
+
+    @pytest.mark.unit
+    def test_carga_config_default_valida(self):
+        from agent.config import load_honeypots_config
+        config = load_honeypots_config()
+
+        assert "honeypots" in config
+        assert "detection" in config
+        assert "agent" in config
+
+    @pytest.mark.unit
+    def test_cuatro_tipos_documentados_uno_habilitado(self):
+        from agent.config import enabled_honeypots, load_honeypots_config
+
+        config = load_honeypots_config()
+        types = {hp["type"] for hp in config["honeypots"]}
+        assert types == {"iam_identity", "s3_bucket", "secrets_manager", "rds_endpoint"}
+
+        enabled = enabled_honeypots(config)
+        assert len(enabled) == 1
+        assert enabled[0]["type"] == "iam_identity"
+
+    @pytest.mark.unit
+    def test_guardduty_documentado_como_deshabilitado(self):
+        from agent.config import load_honeypots_config
+
+        config = load_honeypots_config()
+        assert config["detection"]["complementary_layer"]["name"] == "guardduty"
+        assert config["detection"]["complementary_layer"]["enabled"] is False
+
+    @pytest.mark.unit
+    def test_tipo_invalido_lanza_error(self, tmp_path):
+        from agent.config import ConfigValidationError, load_honeypots_config
+
+        bad_config = tmp_path / "bad.yaml"
+        bad_config.write_text(
+            "honeypots:\n"
+            "  - type: not_a_real_type\n"
+            "    name: x\n"
+            "    enabled: true\n"
+            "detection: {}\n"
+            "agent: {}\n"
         )
-        assert len(registry) == 2
+        with pytest.raises(ConfigValidationError):
+            load_honeypots_config(bad_config)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -276,58 +235,26 @@ class TestToolRegistry:
 class TestHoneyAgentIntegration:
 
     @pytest.mark.integration
-    def test_agente_completa_analisis_s3(self, s3_event, default_registry):
+    def test_agente_completa_analisis_y_expone_razonamiento(self, iam_identity_event, default_registry):
         """
-        Verifica el flujo completo: evento → loop → análisis → alerta.
-        Requiere ANTHROPIC_API_KEY configurada.
+        Verifica el flujo completo: evento -> loop -> razonamiento explícito.
+        Requiere credenciales AWS con acceso a Bedrock (invoca Claude Haiku 4.5 real).
         """
-        from agent import HoneyAgent
+        from agent.agent import HoneyAgent
         agent = HoneyAgent(registry=default_registry)
-        result = agent.run(s3_event)
+        result = agent.run(iam_identity_event)
 
         assert result["success"] is True
         assert result["final_analysis"]
         assert result["iterations"] >= 1
-        assert len(result["tools_called"]) >= 1
 
-        # El agente debe haber llamado send_alert como acción final
-        tool_names = [t["tool"] for t in result["tools_called"]]
-        assert "send_alert" in tool_names, "El agente debe enviar una alerta al finalizar"
-
-    @pytest.mark.integration
-    def test_agente_clasifica_severidad_critical(self, cloudtrail_event, default_registry):
-        """
-        Un evento de CloudTrail tampering debe resultar en severidad critical.
-        """
-        from agent import HoneyAgent
-        agent = HoneyAgent(registry=default_registry)
-        result = agent.run(cloudtrail_event)
-
-        assert result["success"] is True
-
-        # Verificar que send_alert fue llamado con severidad critical o high
-        alert_calls = [t for t in result["tools_called"] if t["tool"] == "send_alert"]
-        assert len(alert_calls) > 0
-        severity = alert_calls[-1]["input"].get("severity", "")
-        assert severity in ("critical", "high"), f"Severidad esperada critical/high, recibida: {severity}"
-
-    @pytest.mark.integration
-    def test_agente_usa_multiples_tools(self, s3_event, default_registry):
-        """
-        Para un evento de S3, el agente debe usar al menos ip_reputation_lookup
-        y cloudtrail_query antes de enviar la alerta.
-        """
-        from agent import HoneyAgent
-        agent = HoneyAgent(registry=default_registry)
-        result = agent.run(s3_event)
-
-        tool_names = [t["tool"] for t in result["tools_called"]]
-        assert "ip_reputation_lookup" in tool_names
-        assert "send_alert" in tool_names
+        # El razonamiento debe quedar textual con las secciones pedidas en el system prompt
+        for section in ("Veredicto", "Recomendación"):
+            assert section in result["final_analysis"]
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Tests — Report Generator
+# Tests — Report Generator (Markdown + JSON)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class TestReportGenerator:
@@ -336,50 +263,94 @@ class TestReportGenerator:
     def sample_agent_result(self):
         return {
             "success":    True,
-            "iterations": 3,
+            "iterations": 2,
             "tools_called": [
-                {"tool": "ip_reputation_lookup",  "input": {"ip_address": "203.0.113.42"}},
-                {"tool": "cloudtrail_query",       "input": {"source_ip": "203.0.113.42"}},
-                {"tool": "iam_user_history",       "input": {"username": "hp-admin-backup-user"}},
-                {"tool": "send_alert",             "input": {
-                    "honeypot_name": "hp-fake-credentials-bucket",
-                    "severity":      "high",
-                    "source_ip":     "203.0.113.42",
-                    "aws_user":      "hp-admin-backup-user",
-                    "event_name":    "GetObject",
-                    "event_time":    "2024-01-15T03:22:11+00:00",
-                    "analysis":      "Análisis de prueba para el reporte.",
-                }},
+                {"tool": "lookup_ip_reputation", "input": {"ip": "203.0.113.42"}},
             ],
-            "final_analysis": "**Qué ocurrió**: Acceso al honeypot S3.\n**Recomendaciones**: Bloquear IP.",
+            "final_analysis": (
+                "**Qué observé**: uso de credenciales señuelo desde origen externo.\n\n"
+                "**Qué busqué y por qué**: reputación de la IP de origen.\n\n"
+                "**Cómo cambió mi evaluación**: la IP no corresponde a un uso legítimo.\n\n"
+                "**Veredicto**: critical — credenciales señuelo comprometidas.\n\n"
+                "**Recomendación**: revocar las access keys de billing-readonly de inmediato."
+            ),
             "error": None,
         }
 
     @pytest.mark.unit
-    def test_genera_json_valido(self, s3_event, sample_agent_result):
-        from report_generator import generate_report
+    def test_genera_markdown_con_secciones_fijas(self, iam_identity_event, sample_agent_result):
+        from agent.report_generator import generate_report
         with tempfile.TemporaryDirectory() as tmpdir:
-            paths = generate_report(s3_event, sample_agent_result, output_dir=tmpdir)
+            paths = generate_report(iam_identity_event, sample_agent_result, output_dir=tmpdir)
+
+            assert os.path.exists(paths["markdown"])
+            content = Path(paths["markdown"]).read_text(encoding="utf-8")
+
+            for heading in (
+                "Resumen del evento",
+                "Enriquecimiento mediante herramientas externas",
+                "Razonamiento",
+                "Veredicto",
+                "Recomendación",
+            ):
+                assert heading in content
+
+    @pytest.mark.unit
+    def test_extrae_veredicto_y_recomendacion_con_encabezados_markdown(self, iam_identity_event):
+        """
+        Claude a veces devuelve '### Veredicto' (encabezado) en vez de
+        '**Veredicto**:' (negrita), aunque el system prompt pida lo segundo.
+        report_generator debe tolerar ambos formatos.
+        """
+        from agent.report_generator import generate_report
+
+        agent_result = {
+            "success": True,
+            "iterations": 2,
+            "tools_called": [],
+            "final_analysis": (
+                "### Qué observé\n\nUso de credenciales señuelo.\n\n"
+                "### Veredicto\n\n**Severidad**: HIGH — compromiso confirmado.\n\n"
+                "### Recomendación\n\nRevocar las access keys de inmediato.\n"
+            ),
+            "error": None,
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            paths = generate_report(iam_identity_event, agent_result, output_dir=tmpdir)
+            content = Path(paths["markdown"]).read_text(encoding="utf-8")
+
+        assert "no se pudo extraer" not in content.lower()
+        assert "HIGH — compromiso confirmado" in content
+        assert "Revocar las access keys de inmediato" in content
+
+    @pytest.mark.unit
+    def test_genera_json_autocontenido(self, iam_identity_event, sample_agent_result):
+        from agent.report_generator import generate_report
+        with tempfile.TemporaryDirectory() as tmpdir:
+            paths = generate_report(
+                iam_identity_event, sample_agent_result,
+                raw_event={"eventID": "abc-123"}, output_dir=tmpdir,
+            )
 
             assert os.path.exists(paths["json"])
             with open(paths["json"]) as f:
                 report = json.load(f)
 
-            assert report["incident"]["honeypot_name"] == "hp-fake-credentials-bucket"
-            assert report["agent_analysis"]["success"] is True
-            assert report["report_metadata"]["framework"] == "HoneyAgent v0.1"
+            assert report["event_summary"]["honeypot_name"] == "hp-billing-readonly"
+            assert report["raw_cloudtrail_event"]["eventID"] == "abc-123"
+            assert report["agent_report"]["success"] is True
+            assert "billing-readonly" in report["agent_report"]["final_analysis"]
 
     @pytest.mark.unit
-    def test_genera_pdf(self, s3_event, sample_agent_result):
-        from report_generator import generate_report
+    def test_convencion_de_nombre_incluye_timestamp_e_identidad(self, iam_identity_event, sample_agent_result):
+        from agent.report_generator import generate_report
         with tempfile.TemporaryDirectory() as tmpdir:
-            paths = generate_report(s3_event, sample_agent_result, output_dir=tmpdir)
+            paths = generate_report(iam_identity_event, sample_agent_result, output_dir=tmpdir)
 
-            assert os.path.exists(paths["pdf"])
-            # Un PDF válido empieza con el magic number %PDF
-            with open(paths["pdf"], "rb") as f:
-                header = f.read(4)
-            assert header == b"%PDF", "El archivo generado no es un PDF válido"
+            assert paths["key_prefix"] == "reports/iam_identity/2024/01/15/20240115T032211Z_billing-readonly"
+            assert Path(paths["markdown"]).name == "20240115T032211Z_billing-readonly.md"
+            assert Path(paths["json"]).name == "20240115T032211Z_billing-readonly.json"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -392,10 +363,28 @@ class TestLambdaHandler:
         aws_request_id = "test-request-001"
 
     @pytest.mark.unit
-    def test_handler_retorna_200_en_exito(self, s3_event):
+    def test_summarize_event_traduce_detalle_cloudtrail(self, eventbridge_event):
+        from agent.lambda_handler import summarize_event
+
+        summary, raw = summarize_event(eventbridge_event)
+
+        assert summary["event_name"] == "GetCallerIdentity"
+        assert summary["event_source"] == "sts.amazonaws.com"
+        assert summary["source_ip"] == "203.0.113.42"
+        assert summary["aws_identity"] == "arn:aws:iam::123456789012:user/billing-readonly"
+        assert summary["result"] == "success"
+        assert raw["eventName"] == "GetCallerIdentity"
+
+    @pytest.mark.unit
+    def test_handler_retorna_200_en_exito(self, eventbridge_event):
         """
-        Mockea el agente completo para no llamar a Claude API.
-        El handler solo es responsable de adaptar el evento y llamar al agente.
+        El handler solo adapta el evento y llama al agente; se mockea create_agent.
+
+        _upload_reports_to_s3 también se mockea explícitamente: si el proceso
+        tiene un .env con REPORT_BUCKET/credenciales reales (agent/agent.py
+        carga .env vía python-dotenv al importarse), este test NO debe subir
+        nada a un bucket real — un test "unit" no toca AWS bajo ninguna
+        circunstancia, sin importar qué haya en el entorno.
         """
         mock_result = {
             "success": True, "final_analysis": "Análisis de prueba.",
@@ -404,22 +393,22 @@ class TestLambdaHandler:
         mock_agent = MagicMock()
         mock_agent.run.return_value = mock_result
 
-        # El handler importa create_agent desde el módulo agent — parchamos ahí
-        with patch("agent.create_agent", return_value=mock_agent):
-            from lambda_handler import handler
-            result = handler(s3_event, self.MockContext())
+        with patch("agent.agent.create_agent", return_value=mock_agent), \
+             patch("agent.lambda_handler._upload_reports_to_s3") as mock_upload:
+            from agent.lambda_handler import handler
+            result = handler(eventbridge_event, self.MockContext())
 
+        mock_upload.assert_called_once()
         assert result["statusCode"] == 200
         body = json.loads(result["body"])
         assert body["success"] is True
-        assert body["honeypot"] == "hp-fake-credentials-bucket"
+        assert body["honeypot"] == "hp-billing-readonly"
 
     @pytest.mark.unit
-    def test_handler_retorna_500_en_error_fatal(self, s3_event):
-        """Si create_agent lanza una excepción, Lambda retorna 500."""
-        with patch("agent.create_agent", side_effect=RuntimeError("API down")):
-            from lambda_handler import handler
-            result = handler(s3_event, self.MockContext())
+    def test_handler_retorna_500_en_error_fatal(self, eventbridge_event):
+        with patch("agent.agent.create_agent", side_effect=RuntimeError("API down")):
+            from agent.lambda_handler import handler
+            result = handler(eventbridge_event, self.MockContext())
 
         assert result["statusCode"] == 500
         body = json.loads(result["body"])
@@ -431,5 +420,4 @@ class TestLambdaHandler:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
-    # Correr solo tests unitarios (sin Claude API)
     pytest.main([__file__, "-v", "-m", "unit", "--tb=short"])

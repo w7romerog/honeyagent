@@ -34,25 +34,29 @@ ENV/
 
 # Cache de pytest y Python
 .pytest_cache/
-__pycache__/
 
 # ── Terraform ───────────────────────────────────────────────────────────────────
-# State local puede contener ARNs, IDs de recursos y otros datos sensibles
-terraform/.terraform/
-terraform/terraform.tfstate
-terraform/terraform.tfstate.backup
-terraform/.terraform.lock.hcl
-terraform/tfplan
-terraform/lambda_package.zip   # generado por archive_file en terraform apply
-*.tfvars          # pueden contener valores reales; usar variables de entorno
-!*.tfvars.example # solo templates
+# State local puede contener ARNs, IDs de recursos y otros datos sensibles.
+# infra/.terraform.lock.hcl SÍ se versiona (recomendado por Terraform para
+# reproducibilidad de versiones de provider).
+infra/.terraform/
+infra/terraform.tfstate
+infra/terraform.tfstate.backup
+infra/tfplan.out
+# ZIP generado por scripts/build_lambda_package.sh
+infra/lambda_package.zip
+# Pueden contener valores reales; usar variables de entorno en su lugar
+*.tfvars
+# Los templates de tfvars sí se versionan
+!*.tfvars.example
 
 # ── Reportes generados ──────────────────────────────────────────────────────────
 # Los reportes pueden contener IPs, usuarios y datos del incidente
 reports/
 *.pdf
 *.json
-!tests/mock_events/*.json   # los eventos de test sí se versionan
+# Los eventos de test sí se versionan
+!tests/mock_events/*.json
 
 # ── IDEs y sistema operativo ────────────────────────────────────────────────────
 .idea/

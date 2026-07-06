@@ -4,14 +4,12 @@
 # AWS SDK
 boto3>=1.34.0
 
-# Claude API (Anthropic)
+# Claude vía Amazon Bedrock (AnthropicBedrock) — no se usa la API directa de
+# Anthropic; la autenticación es con credenciales/rol de IAM, no API key.
 anthropic>=0.40.0
 
-# HTTP client (Slack webhook, AbuseIPDB)
+# HTTP client (ip-api.com para lookup_ip_reputation)
 requests>=2.32.0
-
-# Generación de reportes PDF
-reportlab>=4.2.0
 
 # Parsing de YAML (honeypots.yaml)
 pyyaml>=6.0.1
@@ -21,3 +19,4 @@ python-dotenv>=1.0.0
 
 # Testing
 pytest>=8.0.0
+pytest-env>=1.1.0
