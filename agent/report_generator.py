@@ -1,24 +1,11 @@
 """
-agent/report_generator.py
----------------------------
-Genera el reporte final del análisis de un evento del honeypot de identidad.
+Genera el reporte del evento en Markdown + JSON.
 
-Produce dos formatos (alcance del Cap. 4 — sin PDF, sin dashboard):
-  1. Markdown — lectura humana, con secciones fijas: resumen del evento,
-     enriquecimiento mediante herramientas externas, razonamiento, veredicto,
-     recomendación.
-  2. JSON     — integración/trazabilidad: resumen del evento, evento original
-     de CloudTrail sin procesar, y el informe completo del agente. Autocontenido:
-     no depende de la retención de CloudTrail.
+Convención de nombre:
+    reports/iam_identity/{yyyy}/{mm}/{dd}/{timestamp}_{identity}_{event_id}.md|json
 
-Convención de nombre de archivo (usada también para la key de S3):
-    reports/iam_identity/{yyyy}/{mm}/{dd}/{timestamp}_{identity}_{event_id}.md
-    reports/iam_identity/{yyyy}/{mm}/{dd}/{timestamp}_{identity}_{event_id}.json
-
-El sufijo {event_id} (primeros 8 caracteres del eventID de CloudTrail, único
-por evento) evita colisiones cuando dos ataques con la misma identidad señuelo
-caen en el mismo segundo (ej. ataques simultáneos): sin ese sufijo, el segundo
-reporte pisaría al primero en S3.
+El sufijo event_id (eventID de CloudTrail) evita colisiones entre eventos
+de la misma identidad en el mismo segundo.
 """
 
 import json
@@ -31,16 +18,7 @@ logger = logging.getLogger(__name__)
 
 
 def report_key_prefix(event: dict, raw_event: dict | None = None) -> str:
-    """
-    Construye el prefijo de la convención de nombres a partir del timestamp
-    del evento, la identidad involucrada, y el eventID de CloudTrail (no la
-    hora de generación del reporte, para poder correlacionar el reporte con
-    el evento original).
-
-    El eventID es el desempatador ante ataques simultáneos: dos eventos de la
-    misma identidad señuelo pueden caer en el mismo segundo, pero CloudTrail
-    siempre les asigna un eventID distinto.
-    """
+    """Prefijo de nombre: timestamp del evento + identidad + eventID."""
     event_time = _parse_event_time(event.get("event_time"))
     identity = _sanitize_identity(event.get("aws_identity", "unknown"))
     timestamp = event_time.strftime("%Y%m%dT%H%M%SZ")
@@ -58,20 +36,7 @@ def generate_report(
     raw_event: dict | None = None,
     output_dir: str = "reports",
 ) -> dict:
-    """
-    Genera el reporte del evento en formato Markdown y JSON.
-
-    Args:
-        event:        Resumen estructurado del evento (ver agent/lambda_handler.py).
-        agent_result: Resultado del agente (ver agent/agent.py::HoneyAgent.run).
-        raw_event:    Evento crudo de CloudTrail/EventBridge (si está disponible),
-                      para incluirlo sin procesar en el JSON.
-        output_dir:   Directorio donde guardar los archivos generados.
-
-    Returns:
-        Dict {"markdown": path, "json": path} con las rutas locales generadas.
-        El nombre base sigue report_key_prefix(event).
-    """
+    """Genera .md y .json en output_dir. Retorna {"markdown", "json", "key_prefix"}."""
     key_prefix = report_key_prefix(event, raw_event)
     base_name = key_prefix.rsplit("/", 1)[-1]
 
@@ -145,17 +110,7 @@ def _render_tools_table(tools_called: list) -> str:
 
 
 def _extract_section(text: str, label: str) -> str:
-    """
-    Extrae el contenido de una sección del texto del agente, tolerando las dos
-    formas en que Claude la marca en la práctica (el system prompt de
-    agent/agent.py pide negrita, pero el modelo a veces usa encabezado
-    markdown en su lugar):
-
-      - Encabezado propio: "### Veredicto" en su propia línea, contenido hasta
-        el próximo encabezado (de igual o menor nivel) o el final del texto.
-      - Negrita inline: "**Veredicto**: texto...", contenido hasta la próxima
-        negrita en línea nueva o el final del texto.
-    """
+    """Extrae una sección marcada como encabezado markdown o negrita inline."""
     heading_match = re.search(
         rf"^#{{1,6}}\s*{re.escape(label)}\s*$", text, re.IGNORECASE | re.MULTILINE,
     )
@@ -218,12 +173,7 @@ def _sanitize_identity(identity: str) -> str:
 
 
 def _short_event_id(raw_event: dict | None) -> str:
-    """
-    Primeros 8 caracteres del eventID de CloudTrail (único por evento). Si no
-    hay evento crudo disponible (ej. tests unitarios sin raw_event), usa
-    "noeventid" — solo pasa en ese escenario, nunca en producción, donde el
-    eventID siempre lo provee CloudTrail.
-    """
+    """Primeros 8 caracteres del eventID de CloudTrail; "noeventid" si no hay raw_event."""
     event_id = (raw_event or {}).get("eventID")
     if not event_id:
         return "noeventid"

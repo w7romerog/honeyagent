@@ -1,29 +1,4 @@
-"""
-agent/agent.py
----------------
-Agente LLM central de HoneyAgent.
-
-Implementa el loop de tool use (function calling) de la Claude API sobre el
-evento capturado por el honeypot de identidad (IAM). Cuando el pipeline de
-detección (CloudTrail → EventBridge → Lambda) dispara al agente:
-
-  1. Recibe el resumen estructurado del evento (ver agent/lambda_handler.py).
-  2. Le pide a Claude que razone explícitamente sobre el evento, con
-     posibilidad de invocar `lookup_ip_reputation` antes de concluir.
-  3. Ejecuta las tools que Claude solicita vía el ToolRegistry.
-  4. Devuelve los resultados a Claude para que continúe el razonamiento.
-  5. Repite hasta que Claude emite stop_reason == "end_turn".
-
-## Principios SOLID aplicados
-
-**S — Single Responsibility**
-    HoneyAgent solo orquesta el loop de tool use. La lógica de cada
-    herramienta vive en su propia clase (agent/tools/).
-
-**D — Dependency Inversion**
-    HoneyAgent recibe un ToolRegistry en su constructor y no conoce las
-    implementaciones concretas de las tools.
-"""
+"""Agente LLM: loop de tool use sobre el evento del honeypot de identidad."""
 
 import json
 import logging
@@ -38,12 +13,9 @@ from agent.tools.registry import ToolRegistry, build_default_registry
 load_dotenv()
 logger = logging.getLogger(__name__)
 
-# Máximo de iteraciones del loop (safety net contra bucles infinitos)
+# Límite de iteraciones del loop de tool use
 MAX_ITERATIONS = 10
 
-# El razonamiento textual completo (qué observó, qué buscó y por qué, cómo
-# cambió su evaluación, conclusión) debe quedar tal cual en la respuesta final:
-# ese texto es el que report_generator.py vuelca en el Markdown, sin resumir.
 SYSTEM_PROMPT = """Eres HoneyAgent, un agente de análisis de amenazas para un honeypot de \
 identidad (IAM) desplegado en AWS.
 
@@ -91,13 +63,7 @@ Sé directo y técnico. Este análisis va a un equipo de seguridad, no al usuari
 
 
 class HoneyAgent:
-    """
-    Orquestador del loop de tool use con la Claude API.
-
-    Recibe un ToolRegistry por dependency injection: no conoce las
-    implementaciones concretas de las tools, solo trabaja con la
-    abstracción que el registry expone.
-    """
+    """Orquestador del loop de tool use (Claude vía Amazon Bedrock)."""
 
     def __init__(
         self,
@@ -105,24 +71,10 @@ class HoneyAgent:
         model: str | None = None,
         max_iterations: int = MAX_ITERATIONS,
     ) -> None:
-        """
-        Args:
-            registry:       Registry con las tools disponibles para el agente.
-            model:          ID de modelo Bedrock a usar. Si es None, usa AGENT_MODEL del entorno.
-            max_iterations: Límite de iteraciones del loop (default: 10).
-        """
         self._registry = registry
-        # AGENT_MODEL default: Claude Sonnet 4.5 vía Bedrock. Los modelos Haiku
-        # (más económicos) requieren completar un formulario de "intended use
-        # case" en la consola de Bedrock antes de poder invocarse — ver nota en
-        # README.md. Sonnet 4.5 funciona sin ese trámite y su costo sigue siendo
-        # marginal para el volumen de eventos de este MVP.
         self._model = model or os.getenv("AGENT_MODEL", "us.anthropic.claude-sonnet-4-5-20250929-v1:0")
         self._max_iterations = max_iterations
-        # Se usa Amazon Bedrock en vez de la API directa de Anthropic: reutiliza
-        # las credenciales/rol de IAM ya presentes (operador local o rol de
-        # ejecución de la Lambda), sin necesitar una ANTHROPIC_API_KEY ni guardar
-        # ese secret en Secrets Manager.
+        # Bedrock: autenticación por credenciales/rol de IAM, sin API key.
         self._client = anthropic.AnthropicBedrock(aws_region=os.getenv("AWS_REGION", "us-east-1"))
 
         logger.info(
@@ -131,23 +83,7 @@ class HoneyAgent:
         )
 
     def run(self, event: dict) -> dict:
-        """
-        Ejecuta el agente sobre el resumen estructurado de un evento del honeypot.
-
-        Args:
-            event: Resumen del evento (ver agent/lambda_handler.py::summarize_event).
-                   Campos esperados: honeypot_name, event_name, event_source,
-                   source_ip, aws_identity, event_time, aws_region, parameters,
-                   result.
-
-        Returns:
-            Dict con:
-                - success        : True si el agente completó el análisis
-                - final_analysis : texto final con el razonamiento explícito
-                - tools_called   : lista de {tool, input} por iteración
-                - iterations     : cantidad de iteraciones del loop
-                - error          : mensaje de error si falló (None si OK)
-        """
+        """Ejecuta el loop sobre el resumen de evento (ver lambda_handler.summarize_event)."""
         logger.info(
             "Iniciando análisis | evento: %s | honeypot: %s",
             event.get("event_name"), event.get("honeypot_name"),
@@ -242,15 +178,8 @@ class HoneyAgent:
         }
 
 
-# ── Factory function (punto de entrada principal) ───────────────────────────────
-
 def create_agent(registry: ToolRegistry | None = None) -> HoneyAgent:
-    """
-    Crea un HoneyAgent con el registry predeterminado.
-
-    Permite pasar un registry personalizado para testing o extensión:
-        agent = create_agent(registry=my_custom_registry)
-    """
+    """Crea un HoneyAgent con el registry por defecto (o uno custom para tests)."""
     return HoneyAgent(registry=registry or build_default_registry())
 
 

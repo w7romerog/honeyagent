@@ -1,18 +1,4 @@
-"""
-agent/lambda_handler.py
--------------------------
-Entry point de AWS Lambda para HoneyAgent.
-
-EventBridge invoca esta función cuando CloudTrail registra actividad con las
-credenciales del honeypot de identidad (IAM). Responsabilidades (SRP):
-
-    1. Recibir el evento ya filtrado por EventBridge.
-    2. Traducirlo a un resumen estructurado (identidad invocadora, operación,
-       servicio, parámetros relevantes, IP de origen, momento, resultado).
-    3. Invocar al agente (agent/agent.py).
-    4. Persistir los reportes .md y .json en el bucket S3 de reportes, con la
-       convención de nombre de agent/report_generator.py.
-"""
+"""Entry point de Lambda: traduce el evento, invoca al agente, persiste el reporte."""
 
 import json
 import logging
@@ -29,18 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 def summarize_event(eventbridge_event: dict) -> tuple[dict, dict]:
-    """
-    Traduce el evento de EventBridge (detalle de CloudTrail) a un resumen
-    estructurado que consume el agente.
-
-    Args:
-        eventbridge_event: Evento entregado a la Lambda. Puede venir ya
-            resumido por el input_transformer de infra/eventbridge.tf, o con
-            el detalle crudo de CloudTrail bajo la clave "detail".
-
-    Returns:
-        Tupla (resumen_estructurado, evento_crudo_cloudtrail).
-    """
+    """Traduce el detalle de CloudTrail a un resumen estructurado. Retorna (resumen, evento_crudo)."""
     detail = eventbridge_event.get("detail", eventbridge_event)
 
     summary = {
@@ -58,20 +33,12 @@ def summarize_event(eventbridge_event: dict) -> tuple[dict, dict]:
 
 
 def handler(event: dict, context) -> dict:
-    """
-    Entry point de Lambda. Invocado por EventBridge.
-
-    Returns:
-        Dict con statusCode y body.
-    """
+    """Invocado por EventBridge. Retorna {statusCode, body}."""
     logger.info(
         "Lambda invocada | request_id: %s",
         context.aws_request_id if context else "local",
     )
 
-    # El agente usa Amazon Bedrock (agent/agent.py): no hace falta cargar ningún
-    # secret al entorno, las credenciales las resuelve el rol de ejecución de
-    # la Lambda (infra/lambda.tf le da permiso bedrock:InvokeModel).
     from agent.agent import create_agent
     from agent.report_generator import generate_report
 
@@ -105,7 +72,7 @@ def handler(event: dict, context) -> dict:
 
 
 def _upload_reports_to_s3(paths: dict) -> None:
-    """Sube los reportes .md/.json a S3 usando la convención de nombres de report_generator."""
+    """Sube .md/.json a S3 con la convención de nombres de report_generator."""
     bucket = os.getenv("REPORT_BUCKET")
     if not bucket:
         return

@@ -1,14 +1,6 @@
 """
-agent/tools/lookup_ip_reputation.py
--------------------------------------
-Tool del agente: consulta geolocalización/reputación pública de una IP.
-
-Elección de proveedor (decisión no fijada por el TFC, resuelta según la
-instrucción de tomar la opción más simple que no requiera credenciales
-adicionales): ip-api.com. Es una API gratuita, sin API key, sin registro,
-que expone país, proveedor (ISP) y organización asociada al rango de IP —
-suficiente para el enriquecimiento que describe el Cap. 4 (no expone un
-score de abuso como AbuseIPDB, que sí requiere key).
+Tool del agente: geolocalización/reputación pública de IP vía ip-api.com
+(gratuita, sin API key).
 """
 
 import json
@@ -51,12 +43,6 @@ class LookupIPReputationTool(HoneyTool):
         }
 
     def execute(self, ip: str) -> dict:
-        """
-        Consulta ip-api.com y retorna país, ISP y organización de la IP.
-
-        Returns:
-            Dict con 'ip', 'country', 'country_code', 'isp', 'org', 'as', 'error'.
-        """
         if os.getenv("HONEYAGENT_MOCK", "false").lower() == "true":
             return self._mock_response(ip)
 

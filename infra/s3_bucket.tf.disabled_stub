@@ -1,21 +1,6 @@
-# infra/s3_bucket.tf.disabled_stub
-#
-# Documenta cómo se extendería el patrón al honeypot type=s3_bucket
-# (hp-fake-credentials-bucket en honeypots.yaml, enabled: false).
-#
-# Este archivo NO termina en ".tf": Terraform lo ignora por completo, así que
-# no se aprovisiona ningún recurso real. Si en un trabajo futuro se habilita
-# este tipo de honeypot, el patrón es:
-#
-#   1. Renombrar este archivo a "s3_bucket.tf".
-#   2. Cambiar `enabled: false` a `enabled: true` en honeypots.yaml.
-#   3. Sumar una regla de EventBridge equivalente a la de infra/eventbridge.tf,
-#      pero matcheando `requestParameters.bucketName` en vez de `userIdentity`.
-#
-# No se modifica agent/agent.py ni el pipeline de detección: el mismo
-# lambda_handler.py y el mismo agente sirven para cualquier tipo de honeypot,
-# porque ambos trabajan sobre el resumen estructurado del evento, no sobre el
-# tipo de recurso que lo generó.
+# Stub del honeypot S3 (enabled: false). No termina en .tf: Terraform lo
+# ignora. Para habilitarlo: renombrar a s3_bucket.tf, enabled: true en
+# honeypots.yaml, y agregar la regla de EventBridge correspondiente.
 
 locals {
   s3_bucket_honeypots = {

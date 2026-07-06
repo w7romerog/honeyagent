@@ -1,14 +1,9 @@
 #!/usr/bin/env bash
-# scripts/build_lambda_package.sh
-#
-# Empaquetado simple de la Lambda (no es un pipeline de CI/CD, es un script de
-# build local). Instala las dependencias de pip -incluido el SDK de Anthropic,
-# que el runtime de Lambda no trae por defecto- junto al código de agent/ y
-# arma el ZIP que infra/lambda.tf sube a AWS Lambda.
+# Empaqueta agent/ + dependencias para el ZIP de Lambda.
 #
 # Uso:
 #   ./scripts/build_lambda_package.sh
-#   cd infra && terraform apply ...
+#   cd infra && terraform apply
 
 set -euo pipefail
 
@@ -20,7 +15,7 @@ echo "Limpiando build anterior..."
 rm -rf "${BUILD_DIR}" "${OUTPUT_ZIP}"
 mkdir -p "${BUILD_DIR}"
 
-echo "Instalando dependencias (incluye el SDK de Anthropic)..."
+echo "Instalando dependencias..."
 pip install --platform manylinux2014_x86_64 --target "${BUILD_DIR}" \
     --implementation cp --python-version 3.12 --only-binary=:all: \
     -r "${ROOT_DIR}/requirements.txt"
@@ -29,11 +24,7 @@ echo "Copiando código del agente..."
 cp -r "${ROOT_DIR}/agent" "${BUILD_DIR}/agent"
 
 echo "Empaquetando ${OUTPUT_ZIP}..."
-# Se arma el ZIP con el módulo zipfile de Python (portable) en vez del binario
-# `zip`, que no está disponible por defecto en Git Bash para Windows.
-# Si estamos en Git Bash sobre Windows, el intérprete de Python es nativo de
-# Windows: hay que convertir los paths POSIX (/c/...) a formato Windows con
-# cygpath antes de pasárselos.
+# zipfile de Python en vez del binario zip (no siempre disponible en Windows).
 if command -v cygpath >/dev/null 2>&1; then
     BUILD_DIR_FOR_PY="$(cygpath -w "${BUILD_DIR}")"
     OUTPUT_ZIP_FOR_PY="$(cygpath -w "${OUTPUT_ZIP}")"

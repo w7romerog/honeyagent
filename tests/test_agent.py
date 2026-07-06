@@ -1,25 +1,11 @@
 """
-tests/test_agent.py
---------------------
-Tests del MVP de HoneyAgent (Cap. 4 — honeypot de identidad).
+Tests de HoneyAgent (tools, registry, config, agente, report_generator, lambda_handler).
 
-Qué se verifica:
-  1. La tool lookup_ip_reputation funciona en modo mock.
-  2. El ToolRegistry registra y despacha correctamente.
-  3. agent/config.py valida el esquema de honeypots.yaml.
-  4. El loop del agente completa el análisis con un evento real de Claude API
-     (tests de integración, no corren en CI por defecto).
-  5. report_generator produce Markdown + JSON con las secciones fijas y la
-     convención de nombres esperadas.
-  6. lambda_handler traduce el evento de CloudTrail y responde 200/500.
-
-Cómo correr:
     HONEYAGENT_MOCK=true python -m pytest tests/ -v -m unit
-    HONEYAGENT_MOCK=true python -m pytest tests/ -v -m integration   # requiere credenciales AWS con acceso a Bedrock
+    HONEYAGENT_MOCK=true python -m pytest tests/ -v -m integration   # requiere acceso a Bedrock
 
-Convención de marcadores:
-    @pytest.mark.unit        → sin dependencias externas
-    @pytest.mark.integration → llama a la Claude API real
+@pytest.mark.unit        → sin dependencias externas
+@pytest.mark.integration → llama al modelo real
 """
 
 import json
@@ -36,9 +22,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 os.environ.setdefault("HONEYAGENT_MOCK", "true")
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
 # Fixtures
-# ═══════════════════════════════════════════════════════════════════════════════
 
 @pytest.fixture
 def iam_identity_event():
@@ -79,9 +63,7 @@ def default_registry():
     return build_default_registry()
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
 # Tests unitarios — lookup_ip_reputation
-# ═══════════════════════════════════════════════════════════════════════════════
 
 class TestLookupIPReputationTool:
 
@@ -114,9 +96,7 @@ class TestLookupIPReputationTool:
         assert defn["input_schema"]["required"] == ["ip"]
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
 # Tests unitarios — ToolRegistry
-# ═══════════════════════════════════════════════════════════════════════════════
 
 class TestToolRegistry:
 
@@ -176,9 +156,7 @@ class TestToolRegistry:
         assert len(registry) == 1
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
 # Tests unitarios — Config / esquema de honeypots.yaml
-# ═══════════════════════════════════════════════════════════════════════════════
 
 class TestHoneypotsConfig:
 
@@ -228,18 +206,13 @@ class TestHoneypotsConfig:
             load_honeypots_config(bad_config)
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Tests de integración — Agente completo con Claude API
-# ═══════════════════════════════════════════════════════════════════════════════
+# Tests de integración — Agente completo (Bedrock)
 
 class TestHoneyAgentIntegration:
 
     @pytest.mark.integration
     def test_agente_completa_analisis_y_expone_razonamiento(self, iam_identity_event, default_registry):
-        """
-        Verifica el flujo completo: evento -> loop -> razonamiento explícito.
-        Requiere credenciales AWS con acceso a Bedrock (invoca Claude Haiku 4.5 real).
-        """
+        """Flujo completo: evento -> loop -> razonamiento. Requiere acceso real a Bedrock."""
         from agent.agent import HoneyAgent
         agent = HoneyAgent(registry=default_registry)
         result = agent.run(iam_identity_event)
@@ -253,9 +226,7 @@ class TestHoneyAgentIntegration:
             assert section in result["final_analysis"]
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
 # Tests — Report Generator (Markdown + JSON)
-# ═══════════════════════════════════════════════════════════════════════════════
 
 class TestReportGenerator:
 
@@ -297,11 +268,7 @@ class TestReportGenerator:
 
     @pytest.mark.unit
     def test_extrae_veredicto_y_recomendacion_con_encabezados_markdown(self, iam_identity_event):
-        """
-        Claude a veces devuelve '### Veredicto' (encabezado) en vez de
-        '**Veredicto**:' (negrita), aunque el system prompt pida lo segundo.
-        report_generator debe tolerar ambos formatos.
-        """
+        """Debe tolerar '### Veredicto' además de '**Veredicto**:'."""
         from agent.report_generator import generate_report
 
         agent_result = {
@@ -358,11 +325,7 @@ class TestReportGenerator:
 
     @pytest.mark.unit
     def test_eventos_simultaneos_no_pisan_el_mismo_archivo(self, iam_identity_event, sample_agent_result):
-        """
-        Dos ataques con la misma identidad señuelo en el mismo segundo (mismo
-        event_time) deben producir nombres de archivo distintos, gracias al
-        sufijo del eventID de CloudTrail.
-        """
+        """Mismo event_time, distinto eventID → nombres de archivo distintos."""
         from agent.report_generator import generate_report
         with tempfile.TemporaryDirectory() as tmpdir:
             paths_1 = generate_report(
@@ -381,9 +344,7 @@ class TestReportGenerator:
             assert os.path.exists(paths_2["markdown"])
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
 # Tests — Lambda Handler
-# ═══════════════════════════════════════════════════════════════════════════════
 
 class TestLambdaHandler:
 
@@ -405,15 +366,7 @@ class TestLambdaHandler:
 
     @pytest.mark.unit
     def test_handler_retorna_200_en_exito(self, eventbridge_event):
-        """
-        El handler solo adapta el evento y llama al agente; se mockea create_agent.
-
-        _upload_reports_to_s3 también se mockea explícitamente: si el proceso
-        tiene un .env con REPORT_BUCKET/credenciales reales (agent/agent.py
-        carga .env vía python-dotenv al importarse), este test NO debe subir
-        nada a un bucket real — un test "unit" no toca AWS bajo ninguna
-        circunstancia, sin importar qué haya en el entorno.
-        """
+        """Mockea create_agent y _upload_reports_to_s3: un test unit no toca AWS real."""
         mock_result = {
             "success": True, "final_analysis": "Análisis de prueba.",
             "tools_called": [], "iterations": 2, "error": None,
@@ -443,9 +396,7 @@ class TestLambdaHandler:
         assert "error" in body
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
 # Runner standalone
-# ═══════════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-m", "unit", "--tb=short"])

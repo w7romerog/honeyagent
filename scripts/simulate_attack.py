@@ -1,26 +1,6 @@
 """
-scripts/simulate_attack.py
-----------------------------
-Script de validación end-to-end del MVP (Cap. 4, paso 6 del plan de ejecución).
-
-Simula el escenario de ataque más simple posible sobre el honeypot de
-identidad: usa las credenciales señuelo (de larga duración, generadas por
-Terraform pero nunca usadas legítimamente) para invocar una API de AWS que no
-requiere ningún permiso adicional (`sts:GetCallerIdentity`).
-
-Esa sola llamada, hecha con las credenciales del usuario IAM señuelo, debería
-disparar el pipeline completo:
-
-    CloudTrail registra el evento
-        -> EventBridge lo enruta a la Lambda (infra/eventbridge.tf)
-            -> la Lambda invoca al agente (agent/lambda_handler.py)
-                -> el agente razona y opcionalmente llama a lookup_ip_reputation
-                    -> se persisten reports/iam_identity/.../*.md y *.json en S3
-
-Requiere credenciales del operador (con permiso para leer el secret) ya
-configuradas en el entorno (perfil de AWS CLI, variables de entorno, etc.).
-No requiere ANTHROPIC_API_KEY ni HONEYAGENT_MOCK: esas variables las usa la
-Lambda, no este script.
+Simula el uso de las credenciales señuelo para disparar el pipeline
+(CloudTrail -> EventBridge -> Lambda -> agente -> reporte en S3).
 
 Uso:
     python scripts/simulate_attack.py
@@ -89,17 +69,11 @@ def main() -> None:
     try:
         result = run_decoy_action(credentials, args.region, args.action)
     except ClientError as e:
-        # Con ReadOnlyAccess, la mayoría de las llamadas de solo lectura funcionan.
-        # Si la API elegida requiere un permiso no incluido, igual queda el intento
-        # registrado en CloudTrail (lo que dispara el pipeline).
         print(f"[simulate_attack] La llamada falló (esperable con permisos mínimos): {e}")
         result = {"error": str(e)}
 
     print(json.dumps(result, indent=2, default=str))
-    print(
-        "\n[simulate_attack] Listo. Revisá el bucket de reportes en unos segundos "
-        "(CloudTrail -> EventBridge -> Lambda -> agente puede tardar ~1 minuto)."
-    )
+    print("\n[simulate_attack] Listo. El reporte puede tardar varios minutos en aparecer en S3.")
 
 
 if __name__ == "__main__":

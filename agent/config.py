@@ -1,14 +1,4 @@
-"""
-agent/config.py
------------------
-Carga y valida honeypots.yaml.
-
-El TFC (Cap. 4) define 4 tipos de honeypot posibles; el MVP implementa uno solo
-(iam_identity) y documenta los otros tres con `enabled: false`. Este módulo valida
-que el esquema esté completo (incluso para los tipos deshabilitados) y expone
-solo los honeypots activos al resto del sistema (infra los lee vía Terraform
-`yamldecode`; el agente/lambda_handler los lee vía este módulo).
-"""
+"""Carga y valida el esquema de honeypots.yaml."""
 
 from pathlib import Path
 
@@ -25,17 +15,7 @@ class ConfigValidationError(ValueError):
 
 
 def load_honeypots_config(path: str | Path = DEFAULT_CONFIG_PATH) -> dict:
-    """
-    Carga honeypots.yaml y valida su esquema.
-
-    Returns:
-        Dict con las claves 'honeypots', 'detection', 'agent' tal como están
-        en el YAML (sin filtrar deshabilitados — usar `enabled_honeypots` para eso).
-
-    Raises:
-        ConfigValidationError: si falta alguna sección o un honeypot no cumple
-        el esquema mínimo.
-    """
+    """Carga honeypots.yaml y valida su esquema. No filtra deshabilitados."""
     with open(path, encoding="utf-8") as f:
         raw = yaml.safe_load(f)
 

@@ -1,10 +1,4 @@
-# infra/eventbridge.tf
-# Amazon EventBridge: motor de enrutamiento del pipeline de detección
-# (detection.routing_engine en honeypots.yaml).
-#
-# Una regla por honeypot de identidad habilitado: matchea cualquier llamada de
-# API de CloudTrail cuya identidad invocadora sea el usuario IAM señuelo, y la
-# enruta a la Lambda del agente.
+# EventBridge: matchea actividad del usuario IAM señuelo y enruta a la Lambda.
 
 resource "aws_cloudwatch_event_rule" "iam_identity_honeypot" {
   for_each = local.iam_identity_honeypots
@@ -29,9 +23,7 @@ resource "aws_cloudwatch_event_target" "iam_identity_honeypot_lambda" {
   target_id = "HoneyAgentLambda"
   arn       = aws_lambda_function.honeyagent.arn
 
-  # El placeholder <honeypot> va sin comillas: EventBridge lo sustituye por el
-  # objeto JSON completo de $.detail, no por un string (patrón documentado de
-  # AWS para input_transformer con sustitución de objetos anidados).
+  # <honeypot> sin comillas: EventBridge lo sustituye por el objeto JSON completo.
   input_transformer {
     input_paths = {
       honeypot = "$.detail"

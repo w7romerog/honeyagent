@@ -1,13 +1,4 @@
-# infra/cloudtrail.tf
-# Habilita CloudTrail para registrar eventos de administración (management
-# events). Es la fuente de auditoría del pipeline de detección
-# (detection.audit_source en honeypots.yaml).
-#
-# No se configuran data_resource de S3: el honeypot S3 está deshabilitado en
-# el MVP, así que alcanza con management events (incluye toda la actividad de
-# IAM/STS del honeypot de identidad).
-#
-# Un trail de CloudTrail es gratis en AWS Free Tier (el primero por cuenta).
+# CloudTrail: fuente de auditoría del pipeline (management events).
 
 resource "aws_s3_bucket" "cloudtrail_logs" {
   bucket        = "${local.prefix}-cloudtrail-logs-${local.account_id}"

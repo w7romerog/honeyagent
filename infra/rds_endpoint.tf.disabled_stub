@@ -1,15 +1,6 @@
-# infra/rds_endpoint.tf.disabled_stub
-#
-# Documenta cómo se extendería el patrón al honeypot type=rds_endpoint
-# (hp-prod-db-endpoint en honeypots.yaml, enabled: false).
-#
-# Este archivo NO termina en ".tf": Terraform lo ignora por completo, así que
-# no se aprovisiona ninguna instancia RDS real (evita el costo y el tiempo de
-# aprovisionamiento de una base de datos gestionada en el lab). Para
-# habilitarlo en un trabajo futuro: renombrar a "rds_endpoint.tf", pasar
-# `enabled: true` en honeypots.yaml, y agregar una regla de EventBridge que
-# matchee `eventSource = rds.amazonaws.com` sobre `requestParameters.dBInstanceIdentifier`.
-# El pipeline de detección y el agente no cambian.
+# Stub del honeypot RDS (enabled: false). No termina en .tf: Terraform lo
+# ignora. Para habilitarlo: renombrar a rds_endpoint.tf, enabled: true, y
+# agregar la regla de EventBridge correspondiente.
 
 locals {
   rds_endpoint_honeypots = {
@@ -27,8 +18,6 @@ resource "aws_db_instance" "honeypot" {
   db_name             = each.value.config.db_name
   allocated_storage   = 20
   username            = "honeyagent_admin"
-  # Password gestionado por AWS (no legítimo, nunca usado) — ver
-  # manage_master_user_password en el provider AWS >= 5.x.
   manage_master_user_password = true
   skip_final_snapshot         = true
   publicly_accessible         = false

@@ -1,35 +1,29 @@
 # HoneyAgent
 
-**Prototipo MVP de un framework de honeypots en AWS con agente LLM para detección y
-respuesta a amenazas.**
+Prototipo de honeypots en AWS con agente LLM para detección y respuesta a amenazas.
 
-Trabajo Final de Carrera (Licenciatura en Gestión de Sistemas Informáticos, UAI) —
-sustento empírico del Capítulo 4 (Propuesta de Intervención). Este prototipo implementa
-de punta a punta **un único tipo de señuelo — el honeypot de identidad (IAM)** — y
-documenta los tres restantes (S3, Secrets Manager, RDS) como entradas deshabilitadas en
-`honeypots.yaml`, mostrando cómo se extendería el patrón sin alterar el pipeline de
-detección ni el agente.
+Trabajo Final de Carrera (Licenciatura en Gestión de Sistemas Informáticos, UAI),
+sustento del Capítulo 4. Implementa de punta a punta un honeypot de identidad
+(IAM); S3, Secrets Manager y RDS quedan documentados en `honeypots.yaml` con
+`enabled: false`.
 
 ---
 
-## Alcance del MVP
+## Alcance
 
-**Implementado de punta a punta:**
-- Honeypot de identidad (IAM): usuario señuelo con permisos mínimos y credenciales de
-  larga duración nunca usadas legítimamente.
+**Implementado:**
+- Honeypot de identidad (IAM): usuario señuelo, permisos mínimos, credenciales
+  de larga duración nunca usadas legítimamente.
 - Pipeline de detección: CloudTrail → EventBridge → Lambda.
-- Agente LLM (Claude, vía Amazon Bedrock) con tool use, una sola herramienta
-  (`lookup_ip_reputation`), y razonamiento explícito y trazable.
-- Reportes en Markdown (lectura humana) + JSON (integración/trazabilidad).
-- `scripts/simulate_attack.py`: dispara el flujo completo usando las credenciales
-  señuelo.
+- Agente LLM (Claude vía Amazon Bedrock) con tool use (`lookup_ip_reputation`)
+  y razonamiento explícito.
+- Reportes en Markdown + JSON.
+- `scripts/simulate_attack.py`: dispara el flujo completo.
 
-**Documentado, no implementado** (esquema completo en `honeypots.yaml`, stubs de
-Terraform en `infra/*.tf.disabled_stub`, `enabled: false`):
-- Honeypot S3, Secrets Manager, RDS.
+**Documentado, no implementado:** honeypot S3, Secrets Manager, RDS (esquema
+en `honeypots.yaml`, stubs en `infra/*.tf.disabled_stub`).
 
-**Fuera de alcance** (no implementado): Amazon GuardDuty (capa complementaria del
-pipeline, descrita en paralelo por el TFC), multi-nube, CI/CD productivo, dashboard/UI.
+**Fuera de alcance:** GuardDuty, multi-nube, CI/CD productivo, dashboard/UI.
 
 ---
 
@@ -56,32 +50,27 @@ Atacante usa credenciales del honeypot de identidad
         (reports/iam_identity/{yyyy}/{mm}/{dd}/{ts}_{identity}_{event_id}.*)
 ```
 
-## Stack tecnológico
+## Stack
 
-- **Python 3.12** + boto3
-- **Claude (Amazon Bedrock)** con tool use / function calling — modelo Claude Sonnet 4.5
-  (`us.anthropic.claude-sonnet-4-5-20250929-v1:0`). Los modelos Haiku son más
-  económicos pero requieren completar un formulario de "intended use case" en la
-  consola de Bedrock (Model access) antes de poder invocarse; Sonnet 4.5 funciona
-  sin ese trámite y su costo es marginal para el volumen de este MVP. Se accede vía
-  `AnthropicBedrock` (SDK de Anthropic), autenticando con credenciales/rol de IAM —
-  sin API key ni cuenta separada de Anthropic.
-- **Terraform** para infraestructura AWS (elegido sobre CDK por simplicidad de setup)
-- **AWS**: CloudTrail, EventBridge, Lambda, IAM, S3, Bedrock
-- **ip-api.com** para enriquecimiento de IP (gratis, sin API key)
+- Python 3.12 + boto3
+- Claude vía Amazon Bedrock (`us.anthropic.claude-sonnet-4-5-20250929-v1:0`),
+  autenticado con credenciales/rol de IAM. Los modelos Haiku requieren
+  completar un formulario de "intended use case" en la consola de Bedrock
+  antes de poder invocarse.
+- Terraform
+- AWS: CloudTrail, EventBridge, Lambda, IAM, S3, Bedrock
+- ip-api.com para enriquecimiento de IP (gratis, sin API key)
 
 ---
 
 ## Inicio rápido
 
-### Requisitos previos
+### Requisitos
 
-- Python 3.12+
-- Terraform 1.5+
-- Cuenta AWS con acceso a Amazon Bedrock habilitado para Claude Sonnet 4.5 en la
-  región elegida (Model access en la consola de Bedrock)
+- Python 3.12+, Terraform 1.5+
+- Cuenta AWS con acceso a Bedrock habilitado para Claude Sonnet 4.5
 
-### 1. Clonar e instalar dependencias
+### 1. Instalar dependencias
 
 ```bash
 git clone https://github.com/w7romerog/honeyagent.git
@@ -91,26 +80,24 @@ source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-### 2. Configurar variables de entorno
+### 2. Variables de entorno
 
 ```bash
 cp .env.example .env
-# Editar .env con tus credenciales AWS (el agente usa Bedrock, no hay API key de Anthropic)
+# completar con credenciales AWS
 ```
 
-### 3. Probar el agente en local (sin AWS)
+### 3. Probar el agente en local
 
 ```bash
-# Se ejecuta como módulo (python -m), no como script, porque agent/agent.py
-# vive dentro del paquete agent/ y usa imports absolutos (agent.tools....).
+# corre como módulo, no como script (agent/agent.py usa imports absolutos)
 HONEYAGENT_MOCK=true python -m agent.agent
 ```
 
-### 4. Desplegar infraestructura en AWS
+### 4. Desplegar infraestructura
 
 ```bash
-./scripts/build_lambda_package.sh    # empaqueta agent/ + dependencias (incluye el SDK de Anthropic, para AnthropicBedrock)
-
+./scripts/build_lambda_package.sh
 cd infra
 terraform init
 terraform apply
@@ -122,32 +109,27 @@ terraform apply
 python scripts/simulate_attack.py
 ```
 
-Esto usa las credenciales del usuario IAM señuelo para invocar `sts:GetCallerIdentity`,
-lo que dispara CloudTrail → EventBridge → Lambda → agente, y termina en un reporte
-`.md`/`.json` en el bucket de reportes. **CloudTrail no es instantáneo**: en las
-pruebas reales contra una cuenta AWS, el evento tardó entre 10 y 15 minutos en
-propagarse hasta la Lambda — no esperes verlo en el bucket enseguida.
+Usa las credenciales del usuario IAM señuelo para invocar `sts:GetCallerIdentity`,
+disparando CloudTrail → EventBridge → Lambda → agente. CloudTrail puede tardar
+10-15 minutos en propagar el evento.
 
-### 6. Correr los tests
+### 6. Tests
 
 ```bash
-# Tests unitarios (sin AWS ni APIs externas)
-python -m pytest tests/ -v -m unit
-
-# Tests de integración (requiere credenciales AWS con acceso a Bedrock)
-python -m pytest tests/ -v -m integration
+python -m pytest tests/ -v -m unit          # sin AWS
+python -m pytest tests/ -v -m integration   # requiere acceso a Bedrock
 ```
 
 ---
 
-## Estructura del proyecto
+## Estructura
 
 ```
 honeyagent/
-├── honeypots.yaml              # Configuración declarativa: honeypots, detection, agent
+├── honeypots.yaml              # honeypots, detection, agent
 ├── infra/                      # Terraform
-│   ├── main.tf                 # Provider, lectura de honeypots.yaml, bucket de reportes
-│   ├── iam_identity.tf         # Honeypot de identidad (único tipo implementado)
+│   ├── main.tf
+│   ├── iam_identity.tf         # único tipo implementado
 │   ├── s3_bucket.tf.disabled_stub
 │   ├── secrets_manager.tf.disabled_stub
 │   ├── rds_endpoint.tf.disabled_stub
@@ -156,61 +138,49 @@ honeyagent/
 │   ├── lambda.tf
 │   └── variables.tf
 ├── agent/
-│   ├── agent.py                 # HoneyAgent: system prompt (PCI DSS/BCRA) + loop de tool use
-│   ├── lambda_handler.py        # Entry point de Lambda: traduce evento, invoca agente, persiste reportes
-│   ├── report_generator.py      # Reportes Markdown + JSON
-│   ├── config.py                # Carga y valida honeypots.yaml
+│   ├── agent.py                 # loop de tool use
+│   ├── lambda_handler.py        # entry point de Lambda
+│   ├── report_generator.py      # reportes Markdown + JSON
+│   ├── config.py                # validador de honeypots.yaml
 │   └── tools/
-│       ├── base.py              # Interfaz abstracta HoneyTool (SOLID)
-│       ├── registry.py          # ToolRegistry — Open/Closed + DI
+│       ├── base.py
+│       ├── registry.py
 │       └── lookup_ip_reputation.py
 ├── scripts/
-│   ├── build_lambda_package.sh  # Empaquetado simple de la Lambda (incluye anthropic SDK)
-│   └── simulate_attack.py       # Simula el uso de las credenciales señuelo
-├── reports/                     # Directorio de salida local (no se versiona; se crea al correr el agente)
+│   ├── build_lambda_package.sh
+│   └── simulate_attack.py
+├── reports/                     # salida local, no versionada
 └── tests/
     └── test_agent.py
 ```
 
-## Principios de diseño
-
-### SOLID
+## Diseño
 
 | Principio | Aplicación |
 |-----------|-----------|
-| **S** Single Responsibility | `HoneyAgent` orquesta, `HoneyTool` ejecuta, `ToolRegistry` administra |
-| **O** Open/Closed | Agregar una nueva tool no requiere modificar `agent.py`; solo crear la clase y registrarla |
-| **L** Liskov Substitution | Cualquier `HoneyTool` es intercambiable en el agente |
-| **I** Interface Segregation | Interfaz mínima: `execute()` + `definition` |
-| **D** Dependency Inversion | `HoneyAgent` depende de `ToolRegistry` (abstracción), no de tools concretas |
+| Single Responsibility | `HoneyAgent` orquesta, `HoneyTool` ejecuta, `ToolRegistry` administra |
+| Open/Closed | Agregar tools no requiere modificar `agent.py` |
+| Liskov Substitution | Cualquier `HoneyTool` es intercambiable |
+| Interface Segregation | Interfaz mínima: `execute()` + `definition` |
+| Dependency Inversion | `HoneyAgent` depende de `ToolRegistry`, no de tools concretas |
 
-### Trazabilidad regulatoria
-
-El razonamiento del agente (qué observó, qué buscó y por qué, cómo cambió su
-evaluación, conclusión) queda **textual** en el reporte, no resumido — pensado para
-poder evaluarse contra requisitos de documentación de incidentes de PCI DSS v4.0.1 y
-la Comunicación "A" 8398 del BCRA. El prototipo no implementa controles de esos
-marcos: solo documenta con el nivel de detalle que un auditor esperaría encontrar.
+El razonamiento del agente queda textual en el reporte (sin resumir), para
+poder evaluarse contra PCI DSS v4.0.1 y la Comunicación "A" 8398 del BCRA. El
+prototipo no implementa controles de esos marcos, solo documenta con el nivel
+de detalle que un auditor esperaría encontrar.
 
 ### Seguridad
 
-- Sin API keys de terceros: el agente usa Amazon Bedrock, autenticado con
-  credenciales/rol de IAM (las credenciales del honeypot sí se guardan en Secrets
-  Manager, nunca en código)
-- `.env` excluido del repositorio (solo `.env.example` se versiona)
-- IAM con principio de mínimo privilegio (el honeypot de identidad tiene permisos de
-  solo lectura: ninguna acción real tiene efecto; el rol de la Lambda solo puede
-  invocar modelos Bedrock y escribir en el prefijo de reportes de S3)
-- Inputs validados en `HoneyTool.safe_execute()` antes de ejecutar
+- Sin API keys de terceros: el agente usa Bedrock con credenciales/rol de IAM
+- `.env` excluido del repositorio
+- IAM de mínimo privilegio (honeypot de solo lectura; la Lambda solo puede
+  invocar Bedrock y escribir en el prefijo de reportes de S3)
+- Inputs validados en `HoneyTool.safe_execute()`
 
-> **Nota para quien corra los tests localmente**: `agent/agent.py` carga `.env`
-> automáticamente al importarse (`python-dotenv`). Si tenés un `.env` con
-> credenciales AWS reales y `REPORT_BUCKET` configurado, cualquier código que
-> importe `agent.agent` — incluidos los tests — puede terminar leyendo esas
-> variables sin que las hayas exportado a mano. Los tests unitarios de
-> `tests/test_agent.py` mockean explícitamente la subida a S3 por esta razón;
-> si agregás un test nuevo que ejercite `agent/lambda_handler.py`, mockeá
-> `_upload_reports_to_s3` para no escribir en un bucket real por accidente.
+`agent/agent.py` carga `.env` al importarse (`python-dotenv`). Con
+credenciales reales en `.env`, cualquier código que importe `agent.agent`
+—incluidos tests— puede leerlas sin exportarlas a mano; los tests mockean
+la subida a S3 por este motivo.
 
 ---
 

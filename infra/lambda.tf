@@ -1,13 +1,5 @@
-# infra/lambda.tf
-# Función Lambda: ejecutora del pipeline de detección (detection.executor en
-# honeypots.yaml). EventBridge la invoca cuando detecta actividad en el
-# honeypot de identidad.
-#
-# El ZIP se genera con scripts/build_lambda_package.sh (empaquetado simple:
-# pip install -t + zip). No se usa el data source `archive_file` sobre el
-# código fuente porque eso NO instala las dependencias de pip — y el runtime
-# de Lambda no incluye el SDK de Anthropic por defecto. Correr el script antes
-# de `terraform apply`.
+# Lambda ejecutora. El ZIP lo genera scripts/build_lambda_package.sh (incluye
+# dependencias); correrlo antes de `terraform apply`.
 
 locals {
   lambda_package_path = "${path.module}/lambda_package.zip"
@@ -39,11 +31,6 @@ resource "aws_iam_role_policy" "lambda_honeyagent_policy" {
     Version = "2012-10-17"
     Statement = [
       {
-        # El agente usa Amazon Bedrock (agent/agent.py::AnthropicBedrock) en vez
-        # de la API directa de Anthropic — sin API key, sin secret. El modelo
-        # (AGENT_MODEL) es un inference profile cross-region, así que se
-        # necesita permiso tanto sobre el foundation model como sobre el
-        # inference profile.
         Sid    = "BedrockInvokeClaude"
         Effect = "Allow"
         Action = ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"]
@@ -73,13 +60,10 @@ resource "aws_lambda_function" "honeyagent" {
   runtime = "python3.12"
   role    = aws_iam_role.lambda_honeyagent.arn
 
-  # Timeout generoso: el agente hace llamadas a Bedrock + ip-api.com
-  timeout     = 300   # 5 minutos (máximo de Lambda)
+  timeout     = 300
   memory_size = 256
 
-  # AWS_REGION no se setea acá: es una variable reservada que Lambda inyecta
-  # automáticamente con la región de despliegue (agent/agent.py la lee con
-  # os.getenv("AWS_REGION", ...), que ya funciona sin configuración extra).
+  # AWS_REGION no se setea: Lambda la inyecta automáticamente (var reservada).
   environment {
     variables = {
       AGENT_MODEL     = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"

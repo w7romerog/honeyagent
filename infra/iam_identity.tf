@@ -1,15 +1,5 @@
-# infra/iam_identity.tf
-# Honeypot de identidad (IAM) — único tipo implementado de punta a punta en el MVP.
-#
-# Por cada honeypot type=iam_identity con enabled: true en honeypots.yaml (en el
-# MVP, uno solo: hp-billing-readonly):
-#   - Usuario IAM señuelo con política de permisos mínima (ninguna acción real
-#     tiene efecto: solo lectura).
-#   - Credenciales de acceso de larga duración, generadas pero nunca usadas
-#     legítimamente — son el "cebo": si aparecen en un CloudTrail, algo salió mal
-#     en otro lado (fuga de secretos) y alguien las está probando.
-#   - Las credenciales se guardan en Secrets Manager para que
-#     scripts/simulate_attack.py pueda leerlas y disparar el escenario simulado.
+# Honeypot de identidad (IAM): usuario señuelo de solo lectura, access key de
+# larga duración guardada en Secrets Manager para simulate_attack.py.
 
 resource "aws_iam_user" "honeypot" {
   for_each = local.iam_identity_honeypots
@@ -36,9 +26,6 @@ resource "aws_iam_access_key" "honeypot" {
   user = aws_iam_user.honeypot[each.key].name
 }
 
-# Credenciales del honeypot: se guardan en Secrets Manager (no en el state en
-# texto plano, aunque el state ya es sensible) para que simulate_attack.py las
-# lea con las credenciales del operador y dispare el escenario de ataque.
 resource "aws_secretsmanager_secret" "honeypot_keys" {
   for_each = aws_iam_access_key.honeypot
 

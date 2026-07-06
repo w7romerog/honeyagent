@@ -1,54 +1,36 @@
 # honeypots.yaml
-# Configuración declarativa de los honeypots (activos señuelo) del prototipo.
+# Configuración declarativa de honeypots. Único tipo implementado en el MVP:
+# iam_identity. Los otros tres quedan documentados con enabled: false.
 #
-# Alcance del MVP (Cap. 4 del TFC): el patrón de honeypot de identidad (IAM) se
-# implementa de punta a punta. Los tres tipos restantes (s3_bucket, secrets_manager,
-# rds_endpoint) quedan documentados con `enabled: false`: el esquema está completo
-# y los stubs de Terraform en infra/ muestran cómo se extendería el patrón sin
-# alterar el pipeline de detección ni el agente.
-#
-# Campos comunes a todo honeypot:
+# Campos comunes:
 #   type        → iam_identity | s3_bucket | secrets_manager | rds_endpoint
-#   name        → identificador del honeypot (también usado como ID interno)
-#   enabled     → si el honeypot se aprovisiona en infra/ (solo iam_identity en el MVP)
+#   name        → identificador del honeypot
+#   enabled     → si se aprovisiona en infra/
 #   description → contexto para el reporte del agente
 #   config      → parámetros específicos del tipo
 
 honeypots:
 
-  # ── Honeypot de identidad (IAM) — único tipo implementado en el MVP ────────────
-  # Usuario IAM con nombre verosímil de una cuenta de automatización de bajo perfil.
-  # Nunca debería autenticarse: cualquier uso de sus credenciales es la señal de
-  # que un atacante encontró una fuga de secretos (repo público, CI mal configurado,
-  # laptop comprometida, etc.) y las está probando.
+  # Honeypot de identidad (IAM) — implementado
   - type: iam_identity
     name: hp-billing-readonly
     enabled: true
     description: >
       Usuario IAM señuelo que simula una cuenta de automatización de solo lectura
       para facturación. Cualquier actividad con sus credenciales indica que fueron
-      comprometidas (activo señuelo).
+      comprometidas.
     username: billing-readonly
     config:
-      # Política mínima: de solo lectura, para que ninguna acción real tenga efecto
-      # aunque el atacante intente usarla.
       attach_policy_arn: "arn:aws:iam::aws:policy/ReadOnlyAccess"
-      # Credenciales de acceso de larga duración, generadas por Terraform pero
-      # nunca usadas legítimamente. Se guardan en Secrets Manager para que
-      # scripts/simulate_attack.py pueda leerlas y disparar el escenario simulado.
       create_access_key: true
       tags:
         Purpose: honeypot
         HoneyAgent: "true"
     alerts:
-      # Cualquier llamada de API con estas credenciales es sospechosa.
       on_events:
         - "*"
 
-  # ── S3 Bucket — documentado, NO implementado en el MVP ─────────────────────────
-  # Simularía un bucket con objetos señuelo (credenciales, backups). Se deja el
-  # esquema completo y el stub en infra/s3_bucket.tf.disabled_stub para mostrar
-  # cómo se extendería el patrón sin desplegar nada real.
+  # S3 Bucket — documentado, no implementado
   - type: s3_bucket
     name: hp-fake-credentials-bucket
     enabled: false
@@ -70,10 +52,7 @@ honeypots:
         - DeleteObject
         - ListBucket
 
-  # ── Secrets Manager — documentado, NO implementado en el MVP ────────────────────
-  # Secret con nombre llamativo (simula password de producción). Un GetSecretValue
-  # indicaría post-compromiso: el atacante ya tiene acceso y busca credenciales
-  # de base de datos.
+  # Secrets Manager — documentado, no implementado
   - type: secrets_manager
     name: hp-prod-db-password
     enabled: false
@@ -90,10 +69,7 @@ honeypots:
         - DeleteSecret
         - PutSecretValue
 
-  # ── RDS Endpoint — documentado, NO implementado en el MVP ───────────────────────
-  # Instancia RDS mínima con nombre de producción. Un intento de conexión (o de
-  # describir/modificar la instancia) indicaría reconocimiento activo sobre la
-  # capa de datos.
+  # RDS Endpoint — documentado, no implementado
   - type: rds_endpoint
     name: hp-prod-db-endpoint
     enabled: false
@@ -109,23 +85,19 @@ honeypots:
         - ModifyDBInstance
         - "AuthenticateDatabaseAccess"
 
-# ── Pipeline de detección ───────────────────────────────────────────────────────
+# Pipeline de detección
 detection:
-  audit_source: cloudtrail       # AWS CloudTrail: fuente de auditoría (eventos de administración)
-  routing_engine: eventbridge    # Amazon EventBridge: motor de enrutamiento de eventos
-  executor: lambda               # AWS Lambda: función ejecutora que invoca al agente
+  audit_source: cloudtrail
+  routing_engine: eventbridge
+  executor: lambda
   complementary_layer:
-    # GuardDuty se describe en el TFC como capa complementaria, en paralelo a la
-    # cadena principal CloudTrail → EventBridge → Lambda. Fuera de alcance del MVP.
     name: guardduty
     enabled: false
 
-# ── Configuración del agente LLM ────────────────────────────────────────────────
+# Configuración del agente LLM
 agent:
-  # El modelo de Claude se resuelve desde esta variable de entorno (ver .env.example)
   model_env_var: AGENT_MODEL
   tools:
     - lookup_ip_reputation
   output_format: markdown+json
-  # Bucket S3 destino de los reportes generados por el agente (creado en infra/main.tf)
   reports_bucket: "honeyagent-reports-${account_id}"
