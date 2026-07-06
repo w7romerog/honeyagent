@@ -124,7 +124,9 @@ python scripts/simulate_attack.py
 
 Esto usa las credenciales del usuario IAM señuelo para invocar `sts:GetCallerIdentity`,
 lo que dispara CloudTrail → EventBridge → Lambda → agente, y termina en un reporte
-`.md`/`.json` en el bucket de reportes (~1 minuto).
+`.md`/`.json` en el bucket de reportes. **CloudTrail no es instantáneo**: en las
+pruebas reales contra una cuenta AWS, el evento tardó entre 10 y 15 minutos en
+propagarse hasta la Lambda — no esperes verlo en el bucket enseguida.
 
 ### 6. Correr los tests
 
@@ -165,7 +167,7 @@ honeyagent/
 ├── scripts/
 │   ├── build_lambda_package.sh  # Empaquetado simple de la Lambda (incluye anthropic SDK)
 │   └── simulate_attack.py       # Simula el uso de las credenciales señuelo
-├── reports/                     # Ejemplos de reportes .md/.json generados en pruebas locales
+├── reports/                     # Directorio de salida local (no se versiona; se crea al correr el agente)
 └── tests/
     └── test_agent.py
 ```
@@ -200,6 +202,15 @@ marcos: solo documenta con el nivel de detalle que un auditor esperaría encontr
   solo lectura: ninguna acción real tiene efecto; el rol de la Lambda solo puede
   invocar modelos Bedrock y escribir en el prefijo de reportes de S3)
 - Inputs validados en `HoneyTool.safe_execute()` antes de ejecutar
+
+> **Nota para quien corra los tests localmente**: `agent/agent.py` carga `.env`
+> automáticamente al importarse (`python-dotenv`). Si tenés un `.env` con
+> credenciales AWS reales y `REPORT_BUCKET` configurado, cualquier código que
+> importe `agent.agent` — incluidos los tests — puede terminar leyendo esas
+> variables sin que las hayas exportado a mano. Los tests unitarios de
+> `tests/test_agent.py` mockean explícitamente la subida a S3 por esta razón;
+> si agregás un test nuevo que ejercite `agent/lambda_handler.py`, mockeá
+> `_upload_reports_to_s3` para no escribir en un bucket real por accidente.
 
 ---
 
